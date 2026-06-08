@@ -7,6 +7,7 @@ import LrcEditor from "./LrcEditor";
 import LyricsDisplay from "./LyricsDisplay";
 import SongLibrary from "./SongLibrary";
 import ShareModal from "./ShareModal";
+import KLogo from "./KLogo";
 import PasswordModal from "./PasswordModal";
 import type { SongMeta } from "@/app/api/songs/route";
 
@@ -354,8 +355,11 @@ export default function KaraokePlayer() {
           <span className="block w-4 h-0.5 bg-white/70 rounded" />
         </button>
 
-        <div className="text-lg sm:text-2xl font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent shrink-0">
-          Karaoké
+        <div className="flex items-center gap-2 shrink-0">
+          <KLogo size={28} className="shrink-0" />
+          <span className="hidden sm:inline text-2xl font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+            Karaoké
+          </span>
         </div>
 
         {shareId && (
@@ -444,7 +448,10 @@ export default function KaraokePlayer() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3 px-1">
-              <span className="text-lg font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">Karaoké</span>
+              <span className="flex items-center gap-2">
+                <KLogo size={24} />
+                <span className="text-lg font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">Karaoké</span>
+              </span>
               <button onClick={() => setDrawerOpen(false)} className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/50 hover:text-white transition-colors">×</button>
             </div>
             {tabs.map(({ key, label }) => (

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { parseLrc, type LrcData } from "@/lib/lrc-parser";
 import LyricsDisplay from "./LyricsDisplay";
+import KLogo from "./KLogo";
 
 interface Anchor {
   playing: boolean;
@@ -99,7 +100,8 @@ export default function ShareFollower({ sessionId }: { sessionId: string }) {
       </div>
 
       <header className="shrink-0 px-3 sm:px-5 py-3 flex items-center gap-2 sm:gap-3 border-b border-white/10 relative z-10">
-        <span className="text-lg font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent shrink-0">Karaoké</span>
+        <KLogo size={26} className="shrink-0" />
+        <span className="hidden sm:inline text-lg font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent shrink-0">Karaoké</span>
         <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/60 whitespace-nowrap shrink-0">
           <span className="hidden sm:inline">écoute partagée</span>
           <span className="sm:hidden">partagé</span>

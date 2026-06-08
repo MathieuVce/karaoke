@@ -13,8 +13,21 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Karaoké",
-  description: "Lecteur karaoké avec défilement de paroles LRC",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  title: "Karaoké : paroles synchronisées mot par mot",
+  description: "Lecteur karaoké façon KaraFun : paroles synchronisées mot par mot, bibliothèque, écoute partagée et séparation voix / instrumental.",
+  applicationName: "Karaoké",
+  openGraph: {
+    title: "Karaoké",
+    description: "Paroles synchronisées mot par mot, écoute partagée multi-appareils.",
+    type: "website",
+    siteName: "Karaoké",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Karaoké",
+    description: "Paroles synchronisées mot par mot, écoute partagée multi-appareils.",
+  },
 };
 
 export const viewport: Viewport = {
