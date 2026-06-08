@@ -1,164 +1,202 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { getCurrentWordIndex, type LrcLine } from "@/lib/lrc-parser";
+import { useRef, useEffect } from "react";
+import { type LrcLine } from "@/lib/lrc-parser";
 
 interface Props {
   lines: LrcLine[];
-  activeIndex: number;
   currentTime: number;
   hasWordTimestamps: boolean;
   onClickLine: (time: number) => void;
 }
 
-// Returns how many seconds until the next line starts (for anticipation glow)
-function timeUntilNext(lines: LrcLine[], activeIndex: number, currentTime: number): number {
-  const next = lines[activeIndex + 1];
-  if (!next) return Infinity;
-  return next.time - currentTime;
+const SLOT_VH = 0.22;
+
+// Échelle relative selon la distance au centre (0 = actif → 1.0)
+// Indexé par distance : dist 0, 1, 2, 3+
+const SCALE_LEVELS = [1.0, 0.74, 0.55, 0.4];
+const OPACITY_LEVELS = [1, 0.55, 0.22, 0.1, 0.04];
+
+function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
+
+function levelAt(arr: number[], d: number): number {
+  const clamped = Math.min(Math.max(d, 0), arr.length - 1);
+  const lo = Math.floor(clamped);
+  const hi = Math.min(lo + 1, arr.length - 1);
+  return lerp(arr[lo], arr[hi], clamped - lo);
 }
 
-// Font size that fills ~90% of viewport width for the given text, clamped to min/max
-function dynSize(text: string, maxVw: number, minRem: number, maxRem: number): string {
-  const len = Math.max(text.replace(/\s/g, "").length, 1);
-  // Each character ≈ 0.55 × fontSize wide; solve for fontSize to fill 90vw:
-  // fontSize * 0.55 * len = 90vw  →  fontSize = 90/(0.55*len) vw ≈ 163/len vw
-  const vw = Math.min(163 / len, maxVw);
-  return `clamp(${minRem}rem, ${vw.toFixed(2)}vw, ${maxRem}rem)`;
+// Distance effective avec PLATEAU : la ligne active (e ∈ [-1,0]) reste à distance 0
+// → garde son zoom max toute sa durée. Continu des deux côtés.
+//   e = dist - t (distance signée au centre)
+//   ligne suivante (e ∈ [0,1])   → distance = e        (grandit en approchant)
+//   ligne active   (e ∈ [-1,0])  → distance = 0        (zoom max maintenu)
+//   ligne passée   (e < -1)      → distance = -e - 1   (rétrécit en s'éloignant)
+function plateauDist(e: number): number {
+  if (e >= 0) return e;
+  if (e >= -1) return 0;
+  return -e - 1;
 }
 
-export default function LyricsDisplay({ lines, activeIndex, currentTime, hasWordTimestamps, onClickLine }: Props) {
-  const [displayIndex, setDisplayIndex] = useState(activeIndex);
-  const [transitioning, setTransitioning] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+// Taille de base d'une ligne = sa taille quand elle est ACTIVE.
+// Ne dépend que de la longueur du texte → constante par ligne → AUCUN reflow au scroll.
+// Renvoie une string clamp() : plancher rem (lisible sur mobile) + remplissage vw + plafond rem.
+// La largeur dispo ≈ 92vw, ratio caractère ≈ 0.52 → fill ≈ 92/(0.52*len) ≈ 177/len (en vw).
+function baseSize(text: string): string {
+  const len = Math.max(text.length, 1);
+  const fillVw = Math.max(4, Math.min(177 / len, 9)); // borne vw
+  // clamp : jamais < 1.5rem (24px, lisible mobile), jamais > 3.6rem (desktop)
+  return `clamp(1.5rem, ${fillVw.toFixed(2)}vw, 3.6rem)`;
+}
 
-  // Smooth transition when active line changes
+export default function LyricsDisplay({ lines, currentTime, hasWordTimestamps, onClickLine }: Props) {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+
+  // Indice actif + progression dérivés DIRECTEMENT de currentTime (pas du prop activeIndex
+  // qui a un frame de retard) → zoom et scroll toujours synchronisés, aucun saut.
+  let active = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].time <= currentTime) active = i; else break;
+  }
+  let t = 0;
+  if (active >= 0 && lines[active + 1]) {
+    const dur = lines[active + 1].time - lines[active].time;
+    const elapsed = currentTime - lines[active].time;
+    t = dur > 0 ? Math.max(0, Math.min(1, elapsed / dur)) : 0;
+  }
+
+  // Transform continu sur le DOM : zéro React re-render, zéro saut
   useEffect(() => {
-    if (activeIndex === displayIndex) return;
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    setTransitioning(true);
-    timeoutRef.current = setTimeout(() => {
-      setDisplayIndex(activeIndex);
-      setTransitioning(false);
-    }, 120);
-    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
-  }, [activeIndex, displayIndex]);
+    const outer = outerRef.current;
+    const inner = innerRef.current;
+    if (!outer || !inner || lines.length === 0 || active < 0) return;
 
-  const until = timeUntilNext(lines, activeIndex, currentTime);
-  // Next line "glows in" when < 2s away
-  const nextGlow = until < 2 ? Math.max(0, 1 - until / 2) : 0;
-
-  const prev = lines[displayIndex - 1] ?? null;
-  const curr = lines[displayIndex] ?? null;
-  const next = lines[displayIndex + 1] ?? null;
-  const afterNext = lines[displayIndex + 2] ?? null;
+    // Hauteur RÉELLE d'un slot mesurée dans le DOM (évite le décalage vh ↔ window.innerHeight
+    // sur mobile, qui s'accumule au fil de la chanson). Repli sur le calcul si pas encore monté.
+    const first = inner.firstElementChild as HTMLElement | null;
+    const slot = first?.offsetHeight || window.innerHeight * SLOT_VH;
+    const frac = active + t;
+    const translateY = -(frac * slot + slot / 2) + outer.clientHeight / 2;
+    inner.style.transform = `translateY(${translateY}px)`;
+  }, [currentTime, active, lines, t]);
 
   if (lines.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-8">
-        <p className="text-white/40 text-lg">Chargez un fichier .lrc</p>
-        <p className="text-white/20 text-sm">ou créez-en un dans l&apos;onglet Créer</p>
+      <div className="flex flex-col items-center justify-center h-full text-white/30 text-sm gap-2">
+        <p>Chargez un fichier .lrc</p>
+        <p className="text-xs">ou créez-en un dans l&apos;onglet Créer</p>
       </div>
     );
   }
 
+  const slotPx = `${SLOT_VH * 100}vh`;
+
   return (
-    <div className={`flex flex-col items-center justify-center h-full gap-6 px-8 transition-opacity duration-100 ${transitioning ? "opacity-80" : "opacity-100"}`}>
+    <div
+      ref={outerRef}
+      className="h-full overflow-hidden relative"
+      style={{ maskImage: "linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)" }}
+    >
+      <div ref={innerRef} style={{ willChange: "transform" }}>
+        {lines.map((line, i) => {
+          const dist = i - active;
+          const isActive = dist === 0;
+          const isPast = dist < 0;
 
-      {/* Previous line — clairement passée : violet atténué */}
-      <div
-        className="text-center cursor-pointer transition-all duration-500 w-full px-6"
-        style={{ opacity: prev ? 0.45 : 0 }}
-        onClick={() => prev && onClickLine(prev.time)}
-      >
-        <span style={{ fontSize: dynSize(prev?.text ?? "x", 5, 0.9, 2.2), lineHeight: 1.4, fontWeight: 600, color: "#a78bfa" }}>
-          {prev?.text ?? ""}
-        </span>
-      </div>
+          // Distance effective signée + version "plateau" (zoom max maintenu sur l'active)
+          const effDist = dist - t;
+          const pd = plateauDist(effDist);
 
-      {/* Current line — grande, pleine largeur, mots surlignés */}
-      <div
-        className="text-center cursor-pointer w-full px-4"
-        onClick={() => curr && onClickLine(curr.time)}
-      >
-        {curr ? (
-          hasWordTimestamps && curr.words && curr.words.length > 0 ? (
-            <WordLine words={curr.words} currentTime={currentTime} text={curr.text} />
-          ) : (
-            <span
-              className="font-extrabold"
-              style={{
-                fontSize: dynSize(curr.text || "x", 12, 1.6, 7),
-                lineHeight: 1.2,
-                letterSpacing: "0.01em",
-                background: "linear-gradient(90deg, #ffffff 0%, #f0abfc 50%, #ffffff 100%)",
-                WebkitBackgroundClip: "text",
-                backgroundClip: "text",
-                color: "transparent",
-                filter: "drop-shadow(0 0 28px rgba(216,180,254,0.55))",
-              }}
+          const opacity = levelAt(OPACITY_LEVELS, pd);
+          // font-size FIXE par ligne (jamais recalculée) ; seul scale varie → GPU, pas de reflow
+          const fontSize = baseSize(line.text || "x");
+          const scale = levelAt(SCALE_LEVELS, pd);
+
+          // Seule la ligne active (dist===0) a le gradient : les autres restent blanches jusqu'à leur tour
+          const isNearActive = dist === 0;
+          const color = isNearActive
+            ? "transparent"
+            : effDist < 0
+            ? `rgba(167,139,250,${lerp(0.9, 0.5, Math.min(Math.abs(effDist) - 0.5, 1))})`
+            : `rgba(255,255,255,${lerp(0.85, 0.4, Math.min(effDist - 0.5, 1))})`;
+
+          return (
+            <div
+              key={i}
+              onClick={() => onClickLine(line.time)}
+              className="flex items-center justify-center cursor-pointer text-center px-6"
+              style={{ height: slotPx, opacity }}
             >
-              {curr.text || "♪"}
-            </span>
-          )
-        ) : null}
-      </div>
-
-      {/* Next line — clairement à venir : blanc pur, s'illumine à l'approche */}
-      <div
-        className="text-center cursor-pointer transition-all duration-700 w-full px-5"
-        style={{
-          opacity: next ? 0.55 + nextGlow * 0.35 : 0,
-          filter: nextGlow > 0.3 ? `drop-shadow(0 0 16px rgba(255,255,255,${(nextGlow * 0.35).toFixed(2)}))` : "none",
-        }}
-        onClick={() => next && onClickLine(next.time)}
-      >
-        <span style={{ fontSize: dynSize(next?.text ?? "x", 8, 1.1, 4), lineHeight: 1.4, fontWeight: 700, color: `rgba(255,255,255,${0.75 + nextGlow * 0.25})` }}>
-          {next?.text ?? ""}
-        </span>
-      </div>
-
-      {/* Ligne d'après — hint grisé */}
-      <div
-        className="text-center cursor-pointer transition-all duration-500 w-full px-8"
-        style={{ opacity: afterNext ? 0.22 : 0 }}
-        onClick={() => afterNext && onClickLine(afterNext.time)}
-      >
-        <span style={{ fontSize: dynSize(afterNext?.text ?? "x", 5, 0.8, 1.8), lineHeight: 1.4, fontWeight: 500, color: "rgba(255,255,255,0.55)" }}>
-          {afterNext?.text ?? ""}
-        </span>
+              {isActive && hasWordTimestamps && line.words?.length ? (
+                <WordLine words={line.words} currentTime={currentTime} text={line.text} scale={scale} lineEnd={lines[active + 1]?.time ?? (line.words[line.words.length - 1].time + 4)} />
+              ) : (
+                <span
+                  style={{
+                    display: "block",
+                    fontSize,
+                    // poids CONSTANT → le texte a toujours la même largeur → wrapping identique
+                    // quel que soit l'état (actif/passé/suivant)
+                    fontWeight: 700,
+                    lineHeight: 1.3,
+                    color: isNearActive ? "transparent" : color,
+                    WebkitTextFillColor: isNearActive ? "transparent" : undefined,
+                    transform: `scale(${scale.toFixed(3)})`,
+                    transformOrigin: "center",
+                    willChange: "transform",
+                    backgroundImage: isNearActive ? "linear-gradient(90deg,#fff,#f0abfc,#fff)" : undefined,
+                    WebkitBackgroundClip: isNearActive ? "text" : undefined,
+                    backgroundClip: isNearActive ? "text" : undefined,
+                    filter: dist === 0 ? "drop-shadow(0 0 28px rgba(216,180,254,0.55))" : "none",
+                  }}
+                >
+                  {line.text || "♪"}
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function WordLine({ words, currentTime, text }: { words: { time: number; text: string }[]; currentTime: number; text: string }) {
-  const activeWordIndex = getCurrentWordIndex(words, currentTime);
+// Couleurs du remplissage karaoké
+const SUNG_A = "#f0abfc";              // début zone chantée (rose)
+const SUNG_B = "#fb923c";              // fin zone chantée (orange)
+const UNSUNG = "rgba(255,255,255,0.30)"; // pas encore chanté (blanc atténué)
 
+function WordLine({ words, currentTime, text, scale, lineEnd }: { words: { time: number; text: string }[]; currentTime: number; text: string; scale: number; lineEnd: number }) {
+  const fontSize = baseSize(text || "x");
+  // Mêmes propriétés que le span normal (poids 700, pas de letter-spacing) → wrapping identique
   return (
-    <span style={{ fontSize: dynSize(text || "x", 12, 1.6, 7), fontWeight: 800, lineHeight: 1.2, letterSpacing: "0.01em" }}>
+    <span style={{ display: "block", fontSize, fontWeight: 700, lineHeight: 1.3, transform: `scale(${scale.toFixed(3)})`, transformOrigin: "center", willChange: "transform" }}>
       {words.map((word, wi) => {
-        const isActive = wi === activeWordIndex;
-        const isPast = wi < activeWordIndex;
+        const wStart = word.time;
+        const wEnd = wi < words.length - 1 ? words[wi + 1].time : lineEnd;
+        // Ratio de progression du mot : 0 = pas commencé, 1 = entièrement chanté
+        const wp = wEnd > wStart
+          ? Math.max(0, Math.min(1, (currentTime - wStart) / (wEnd - wStart)))
+          : (currentTime >= wStart ? 1 : 0);
+
+        const isSinging = wp > 0 && wp < 1;
+        const fill = (wp * 100).toFixed(1);
+
+        // Dégradé avec coupure nette à `fill` : chanté à gauche, non-chanté à droite
+        const backgroundImage = `linear-gradient(90deg, ${SUNG_A} 0%, ${SUNG_B} ${fill}%, ${UNSUNG} ${fill}%, ${UNSUNG} 100%)`;
 
         return (
           <span
             key={wi}
             style={{
               display: "inline",
-              transition: "color 0.08s ease, filter 0.12s ease",
-              // Passé : violet vif bien visible — clairement "chanté"
-              // Actif  : gradient éclatant blanc→mauve→orange
-              // À venir : gris foncé — clairement "pas encore"
-              color: isActive ? "transparent" : isPast ? "#c084fc" : "rgba(255,255,255,0.22)",
-              background: isActive ? "linear-gradient(90deg, #ffffff, #f0abfc, #fb923c)" : undefined,
-              WebkitBackgroundClip: isActive ? "text" : undefined,
-              backgroundClip: isActive ? "text" : undefined,
-              filter: isActive
-                ? "drop-shadow(0 0 22px rgba(251,146,60,0.65))"
-                : isPast
-                ? "drop-shadow(0 0 8px rgba(192,132,252,0.5))"
-                : "none",
+              color: "transparent",
+              WebkitTextFillColor: "transparent",
+              backgroundImage,
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              // glow uniquement sur le mot en cours de chant
+              filter: isSinging ? "drop-shadow(0 0 18px rgba(251,146,60,0.55))" : "none",
             }}
           >
             {word.text}

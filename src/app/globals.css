@@ -25,3 +25,12 @@ body {
   font-family: var(--font-geist-sans), Arial, sans-serif;
   overflow: hidden;
 }
+
+/* Masque la barre de défilement (onglets scrollables sur mobile) */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

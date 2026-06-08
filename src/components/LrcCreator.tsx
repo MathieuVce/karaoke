@@ -182,7 +182,7 @@ export default function LrcCreator({ audioUrl, audioName, onLoadAudio }: Props) 
     <div className="flex flex-col h-full">
       {step === "lyrics" && (
         <div className="flex flex-col gap-5 p-6 max-w-2xl mx-auto w-full">
-          <h2 className="text-xl font-bold text-white">1: Vos paroles</h2>
+          <h2 className="text-xl font-bold text-white">Vos paroles</h2>
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="text-xs text-gray-400 mb-1 block">Titre</label>

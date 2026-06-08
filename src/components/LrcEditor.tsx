@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, Fragment } from "react";
+import { upload } from "@vercel/blob/client";
 import { parseLrc } from "@/lib/lrc-parser";
 
 interface EditLine {
@@ -49,9 +50,11 @@ interface Props {
   audioUrl: string | null;
   audioName: string;
   onLoadAudio: (file: File) => void;
+  // Chanson de la bibliothèque en cours d'édition (permet l'enregistrement serveur)
+  editingSong?: { id: string; lrcUrl: string | null } | null;
 }
 
-export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
+export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSong }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const animRef = useRef<number>(0);
 
@@ -62,10 +65,13 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [lrcLoaded, setLrcLoaded] = useState(false);
+  // Ligne dépliée pour l'édition mot par mot
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   // Track raw timestamp inputs per line (to allow free typing before parsing)
   const [tsInputs, setTsInputs] = useState<Record<number, string>>({});
   // Global offset apply
   const [offsetMs, setOffsetMs] = useState(0);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const tick = useCallback(() => {
     if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
@@ -78,8 +84,7 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
     return () => cancelAnimationFrame(animRef.current);
   }, [playing, tick]);
 
-  const loadLrcFile = async (file: File) => {
-    const text = await file.text();
+  const loadLrcText = useCallback((text: string) => {
     const parsed = parseLrc(text);
     setTitle(parsed.title ?? "");
     setArtist(parsed.artist ?? "");
@@ -92,7 +97,20 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
     setLines(editLines);
     setTsInputs(Object.fromEntries(editLines.map((l) => [l.id, toTimestamp(l.timeS)])));
     setLrcLoaded(true);
+  }, []);
+
+  const loadLrcFile = async (file: File) => {
+    loadLrcText(await file.text());
   };
+
+  // Chargement auto du LRC quand on arrive depuis la bibliothèque
+  useEffect(() => {
+    if (!editingSong) return;
+    setSaveState("idle");
+    if (editingSong.lrcUrl) {
+      fetch(editingSong.lrcUrl).then((r) => r.text()).then(loadLrcText).catch(() => {});
+    }
+  }, [editingSong, loadLrcText]);
 
   const togglePlay = () => {
     const a = audioRef.current;
@@ -123,6 +141,39 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
       return { ...l, timeS: now, words: newWords };
     }));
     setTsInputs((prev) => ({ ...prev, [id]: toTimestamp(now) }));
+  };
+
+  // ─── Édition mot par mot ────────────────────────────────────────────────
+
+  // Cale le timestamp d'un mot sur la position de lecture actuelle
+  const setWordToNow = (lineId: number, wordIdx: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    const now = a.currentTime;
+    setLines((prev) => prev.map((l) => {
+      if (l.id !== lineId || !l.words) return l;
+      const words = l.words.map((w, i) => (i === wordIdx ? { ...w, time: now } : w));
+      return { ...l, words };
+    }));
+  };
+
+  // Ajuste manuellement le timestamp d'un mot (depuis l'input)
+  const setWordTime = (lineId: number, wordIdx: number, val: string) => {
+    const parsed = parseTimestampInput(val);
+    if (parsed === null) return;
+    setLines((prev) => prev.map((l) => {
+      if (l.id !== lineId || !l.words) return l;
+      const words = l.words.map((w, i) => (i === wordIdx ? { ...w, time: parsed } : w));
+      return { ...l, words };
+    }));
+  };
+
+  const seekTo = (t: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = t;
+    setCurrentTime(t);
+    if (a.paused) { a.play(); setPlaying(true); }
   };
 
   const handleTsInput = (id: number, val: string) => {
@@ -173,9 +224,45 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${title || audioName || "karaoke"}_edit.lrc`;
+    a.download = `${title || audioName || "karaoke"}.lrc`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const downloadMp3 = async () => {
+    if (!audioUrl) return;
+    const res = await fetch(audioUrl);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title || audioName || "karaoke"}.mp3`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Réenregistre le LRC édité directement sur le serveur (écrase l'ancien)
+  const saveToServer = async () => {
+    if (!editingSong) return;
+    setSaveState("saving");
+    try {
+      // Supprime tous les LRC existants de cette chanson (évite l'accumulation)
+      await fetch("/api/songs", {
+        method: "PATCH",
+        body: JSON.stringify({ id: editingSong.id }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const content = buildLrcOutput(lines, title, artist);
+      const file = new File([content], `${editingSong.id}.lrc`, { type: "text/plain" });
+      await upload(`karaoke/${editingSong.id}.lrc`, file, {
+        access: "public",
+        handleUploadUrl: "/api/songs/upload",
+      });
+      setSaveState("saved");
+      setTimeout(() => setSaveState("idle"), 2500);
+    } catch {
+      setSaveState("error");
+    }
   };
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -213,9 +300,30 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
                   Appliquer
                 </button>
               </div>
-              <button onClick={downloadLrc} className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-xs font-bold transition-all active:scale-95">
-                Télécharger .lrc
+              {/* Enregistrer sur le serveur : seulement si on édite une chanson de la bibliothèque */}
+              {editingSong && (
+                <button
+                  onClick={saveToServer}
+                  disabled={saveState === "saving"}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95 disabled:opacity-50 ${
+                    saveState === "saved"
+                      ? "bg-green-600"
+                      : saveState === "error"
+                      ? "bg-red-600"
+                      : "bg-gradient-to-r from-violet-600 to-pink-600 hover:from-violet-500 hover:to-pink-500"
+                  }`}
+                >
+                  {saveState === "saving" ? "Enregistrement…" : saveState === "saved" ? "✓ Enregistré" : saveState === "error" ? "Échec : réessayer" : "Enregistrer sur le serveur"}
+                </button>
+              )}
+              <button onClick={downloadLrc} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium transition-all active:scale-95">
+                ↓ .lrc
               </button>
+              {audioUrl && (
+                <button onClick={downloadMp3} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium transition-all active:scale-95">
+                  ↓ .mp3
+                </button>
+              )}
             </>
           )}
         </div>
@@ -263,52 +371,109 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio }: Props) {
               </tr>
             </thead>
             <tbody>
-              {lines.map((line) => {
+              {lines.map((line, li) => {
                 const isActive = currentTime >= line.timeS &&
-                  (lines.indexOf(line) === lines.length - 1 || currentTime < lines[lines.indexOf(line) + 1].timeS);
+                  (li === lines.length - 1 || currentTime < lines[li + 1].timeS);
+                const hasWords = !!line.words && line.words.length > 0;
+                const isExpanded = expandedId === line.id;
                 return (
-                  <tr
-                    key={line.id}
-                    className={`border-b border-gray-800/50 transition-colors ${isActive ? "bg-purple-950/40" : "hover:bg-gray-800/30"}`}
-                  >
-                    <td className="px-4 py-1.5">
-                      <input
-                        className={`w-28 bg-gray-800 border rounded px-2 py-0.5 font-mono text-xs focus:outline-none transition-colors ${
-                          isActive ? "border-purple-500 text-purple-200" : "border-gray-700 text-gray-300 focus:border-purple-500"
-                        }`}
-                        value={tsInputs[line.id] ?? toTimestamp(line.timeS)}
-                        onChange={(e) => handleTsInput(line.id, e.target.value)}
-                        onBlur={() => commitTsInput(line.id)}
-                        onKeyDown={(e) => e.key === "Enter" && commitTsInput(line.id)}
-                      />
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <input
-                        className="w-full bg-transparent text-gray-200 text-sm focus:outline-none focus:bg-gray-800/60 rounded px-1 py-0.5 transition-colors"
-                        value={line.text}
-                        onChange={(e) => handleTextChange(line.id, e.target.value)}
-                      />
-                    </td>
-                    <td className="px-4 py-1.5">
-                      <div className="flex gap-1.5 justify-end">
-                        <button
-                          onClick={() => seekToLine(line.timeS)}
-                          title="Écouter depuis ici"
-                          className="px-2 py-1 rounded bg-gradient-to-r from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 text-xs font-medium transition-all active:scale-95"
-                        >
-                          ▶
-                        </button>
-                        <button
-                          onClick={() => setLineToNow(line.id)}
-                          title="Mettre le timestamp à la position actuelle"
-                          disabled={!audioUrl}
-                          className="px-2 py-1 rounded bg-gradient-to-r from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 text-xs font-medium transition-all active:scale-95 disabled:opacity-30"
-                        >
-                          Ici
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                  <Fragment key={line.id}>
+                    <tr className={`border-b border-gray-800/50 transition-colors ${isActive ? "bg-purple-950/40" : "hover:bg-gray-800/30"}`}>
+                      <td className="px-4 py-1.5">
+                        <input
+                          className={`w-28 bg-gray-800 border rounded px-2 py-0.5 font-mono text-xs focus:outline-none transition-colors ${
+                            isActive ? "border-purple-500 text-purple-200" : "border-gray-700 text-gray-300 focus:border-purple-500"
+                          }`}
+                          value={tsInputs[line.id] ?? toTimestamp(line.timeS)}
+                          onChange={(e) => handleTsInput(line.id, e.target.value)}
+                          onBlur={() => commitTsInput(line.id)}
+                          onKeyDown={(e) => e.key === "Enter" && commitTsInput(line.id)}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          className="w-full bg-transparent text-gray-200 text-sm focus:outline-none focus:bg-gray-800/60 rounded px-1 py-0.5 transition-colors"
+                          value={line.text}
+                          onChange={(e) => handleTextChange(line.id, e.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-1.5">
+                        <div className="flex gap-1.5 justify-end">
+                          {hasWords && (
+                            <button
+                              onClick={() => setExpandedId(isExpanded ? null : line.id)}
+                              title="Éditer mot par mot"
+                              className={`px-2 py-1 rounded text-xs font-medium transition-all active:scale-95 ${isExpanded ? "bg-violet-600" : "bg-white/10 hover:bg-white/20"}`}
+                            >
+                              {isExpanded ? "▾ mots" : "▸ mots"}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => seekToLine(line.timeS)}
+                            title="Écouter depuis ici"
+                            className="px-2 py-1 rounded bg-gradient-to-r from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 text-xs font-medium transition-all active:scale-95"
+                          >
+                            ▶
+                          </button>
+                          <button
+                            onClick={() => setLineToNow(line.id)}
+                            title="Mettre le timestamp à la position actuelle"
+                            disabled={!audioUrl}
+                            className="px-2 py-1 rounded bg-gradient-to-r from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 text-xs font-medium transition-all active:scale-95 disabled:opacity-30"
+                          >
+                            Ici
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {/* Sous-ligne : édition mot par mot */}
+                    {isExpanded && hasWords && (
+                      <tr className="border-b border-gray-800/50 bg-gray-900/40">
+                        <td colSpan={3} className="px-4 py-3">
+                          <p className="text-xs text-gray-500 mb-2">
+                            Clic sur un mot = écouter depuis ce mot · <span className="text-violet-300">●</span> = caler sur la position actuelle
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {line.words!.map((w, wi) => {
+                              const wEnd = wi < line.words!.length - 1 ? line.words![wi + 1].time : line.timeS + 999;
+                              const wActive = currentTime >= w.time && currentTime < wEnd;
+                              return (
+                                <div
+                                  key={wi}
+                                  className={`flex flex-col gap-1 rounded-lg p-1.5 border ${wActive ? "border-violet-500 bg-violet-950/40" : "border-gray-700 bg-gray-800/50"}`}
+                                >
+                                  <button
+                                    onClick={() => seekTo(w.time)}
+                                    className="text-sm text-gray-200 hover:text-violet-300 transition-colors px-1 text-left"
+                                  >
+                                    {w.text.trim() || "·"}
+                                  </button>
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      defaultValue={toTimestamp(w.time)}
+                                      key={`${line.id}-${wi}-${w.time}`}
+                                      onBlur={(e) => setWordTime(line.id, wi, e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                                      className="w-20 bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-gray-300 focus:outline-none focus:border-violet-500"
+                                    />
+                                    <button
+                                      onClick={() => setWordToNow(line.id, wi)}
+                                      disabled={!audioUrl}
+                                      title="Caler sur la position de lecture"
+                                      className="w-6 h-6 rounded-full bg-gradient-to-br from-violet-600 to-pink-600 hover:from-violet-500 hover:to-pink-500 flex items-center justify-center text-[10px] transition-all active:scale-95 disabled:opacity-30 shrink-0"
+                                    >
+                                      ●
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
