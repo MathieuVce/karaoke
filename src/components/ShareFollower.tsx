@@ -64,7 +64,7 @@ export default function ShareFollower({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     poll();
-    const interval = setInterval(poll, 2000);
+    const interval = setInterval(poll, 1000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);

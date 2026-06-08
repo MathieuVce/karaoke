@@ -8,6 +8,8 @@ interface Props {
   onLoadSong: (audioUrl: string, audioName: string, lrcUrl: string | null, vocalsUrl: string | null) => void;
   onEditSong: (song: SongMeta) => void;
   onShareSong: (song: SongMeta) => void;
+  isUnlocked: boolean;
+  onRequestUnlock: (onSuccess: () => void) => void;
 }
 
 type UploadStep = "form" | "uploading" | "done" | "error";
@@ -16,7 +18,7 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-export default function SongLibrary({ onLoadSong, onEditSong, onShareSong }: Props) {
+export default function SongLibrary({ onLoadSong, onEditSong, onShareSong, isUnlocked, onRequestUnlock }: Props) {
   const [songs, setSongs] = useState<SongMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
@@ -175,6 +177,13 @@ export default function SongLibrary({ onLoadSong, onEditSong, onShareSong }: Pro
     }
   };
 
+  const lockIcon = isUnlocked ? "🔓" : "🔒";
+
+  const requestProtectedAction = (action: () => void) => {
+    onRequestUnlock(action);
+    setMenuOpenId(null);
+  };
+
   return (
     <div className="flex flex-col h-full overflow-y-auto overflow-x-hidden">
       {/* Upload section */}
@@ -312,17 +321,38 @@ export default function SongLibrary({ onLoadSong, onEditSong, onShareSong }: Pro
                       style={{ background: "linear-gradient(160deg, #241048, #2e0c56)", border: "1px solid rgba(255,255,255,0.14)" }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <MenuItem onClick={() => { onEditSong(song); setMenuOpenId(null); }}>✎ Modifier les paroles</MenuItem>
+                      <MenuItem onClick={() => {
+                        requestProtectedAction(() => onEditSong(song));
+                      }}>
+                        <span className="mr-2">{lockIcon}</span>✎ Modifier les paroles
+                      </MenuItem>
                       <MenuItem onClick={() => { onShareSong(song); setMenuOpenId(null); }}>⤴ Écoute partagée</MenuItem>
 
                       <div className="my-1 border-t border-white/10" />
 
-                      <MenuFileItem accept=".lrc,text/plain" onFile={(f) => { handleLrcUpload(song, f); setMenuOpenId(null); }}>
-                        {song.lrcUrl ? "↻ Remplacer le LRC" : "+ Ajouter un LRC"}
-                      </MenuFileItem>
-                      <MenuFileItem accept="audio/*,.mp3" onFile={(f) => { handleVocalsUpload(song, f); setMenuOpenId(null); }}>
-                        {song.vocalsUrl ? "↻ Remplacer la voix" : "+ Ajouter la voix (stem)"}
-                      </MenuFileItem>
+                      {isUnlocked ? (
+                        <MenuFileItem accept=".lrc,text/plain" onFile={(f) => { handleLrcUpload(song, f); setMenuOpenId(null); }}>
+                          <span className="mr-2">🔓</span>{song.lrcUrl ? "↻ Remplacer le LRC" : "+ Ajouter un LRC"}
+                        </MenuFileItem>
+                      ) : (
+                        <MenuItem onClick={() => {
+                          requestProtectedAction(() => {});
+                        }}>
+                          <span className="mr-2">🔒</span>{song.lrcUrl ? "↻ Remplacer le LRC" : "+ Ajouter un LRC"}
+                        </MenuItem>
+                      )}
+
+                      {isUnlocked ? (
+                        <MenuFileItem accept="audio/*,.mp3" onFile={(f) => { handleVocalsUpload(song, f); setMenuOpenId(null); }}>
+                          <span className="mr-2">🔓</span>{song.vocalsUrl ? "↻ Remplacer la voix" : "+ Ajouter la voix (stem)"}
+                        </MenuFileItem>
+                      ) : (
+                        <MenuItem onClick={() => {
+                          requestProtectedAction(() => {});
+                        }}>
+                          <span className="mr-2">🔒</span>{song.vocalsUrl ? "↻ Remplacer la voix" : "+ Ajouter la voix (stem)"}
+                        </MenuItem>
+                      )}
 
                       <div className="my-1 border-t border-white/10" />
 
@@ -336,7 +366,11 @@ export default function SongLibrary({ onLoadSong, onEditSong, onShareSong }: Pro
 
                       <div className="my-1 border-t border-white/10" />
 
-                      <MenuItem danger onClick={() => { handleDelete(song.id); setMenuOpenId(null); }}>🗑 Supprimer</MenuItem>
+                      <MenuItem danger onClick={() => {
+                        requestProtectedAction(() => handleDelete(song.id));
+                      }}>
+                        <span className="mr-2">{lockIcon}</span>🗑 Supprimer
+                      </MenuItem>
                     </div>
                   </>
                 )}

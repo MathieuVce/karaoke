@@ -23,6 +23,8 @@ Application web de karaoké avec défilement de paroles synchronisées mot par m
 
 **Séparation voix / instrumental** : ajoute un stem voix (export Suno) pour doser le volume de la voix d'aide grâce à un curseur dédié.
 
+**Protection par mot de passe** : les actions d'administration sensibles (édition, remplacement de fichiers, suppression, sauvegarde serveur) sont protégées par un mot de passe admin configuré via une variable d'environnement, puis validées via un cookie de session signé et expirant.
+
 ## Format des paroles
 
 L'app utilise le format **Enhanced LRC** avec timestamps par mot :
@@ -38,6 +40,12 @@ L'app utilise le format **Enhanced LRC** avec timestamps par mot :
 ```bash
 npm install
 npm run dev
+```
+
+Si le projet est déjà connecté à Vercel, tu peux aussi récupérer les variables d'environnement dans `.env.local` avec :
+
+```bash
+npx vercel env pull .env.local
 ```
 
 Ouvre [http://localhost:3000](http://localhost:3000).
@@ -57,6 +65,23 @@ La bibliothèque et l'écoute partagée utilisent un **Vercel Blob Store** :
 1. Dashboard Vercel, projet, **Storage**, **Create**, **Blob**
 2. Connecter au projet : la variable `BLOB_READ_WRITE_TOKEN` est ajoutée automatiquement
 3. Redéployer
+
+### Mot de passe admin
+
+L'application exige la variable d'environnement `ADMIN_PASSWORD` pour protéger les actions sensibles.
+
+En local, crée un fichier `.env.local` avec une valeur forte, puis relance `npm run dev`.
+
+Si le projet est déjà relié à Vercel, tu peux aussi générer ce fichier avec `npx vercel env pull .env.local`.
+
+Exemple :
+
+```bash
+ADMIN_PASSWORD=un-mot-de-passe-long-et-unique
+BLOB_READ_WRITE_TOKEN=ton_token_vercel_blob
+```
+
+En production, définis `ADMIN_PASSWORD` dans les variables d'environnement de ton hébergeur, puis redéploie.
 
 ## Stack
 

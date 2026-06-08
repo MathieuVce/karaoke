@@ -52,9 +52,11 @@ interface Props {
   onLoadAudio: (file: File) => void;
   // Chanson de la bibliothèque en cours d'édition (permet l'enregistrement serveur)
   editingSong?: { id: string; lrcUrl: string | null } | null;
+  isUnlocked: boolean;
+  onRequestUnlock: (onSuccess: () => void) => void;
 }
 
-export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSong }: Props) {
+export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSong, isUnlocked, onRequestUnlock }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const animRef = useRef<number>(0);
 
@@ -112,12 +114,25 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
     }
   }, [editingSong, loadLrcText]);
 
-  const togglePlay = () => {
+  const togglePlay = useCallback(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) { a.play(); setPlaying(true); }
+    if (a.paused) { a.play().catch(() => {}); setPlaying(true); }
     else { a.pause(); setPlaying(false); }
-  };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isInput = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA");
+      if (e.code === "Space" && !isInput) {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [togglePlay]);
 
   const seekToLine = (timeS: number) => {
     const a = audioRef.current;
@@ -265,6 +280,12 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
     }
   };
 
+  const requestSave = () => {
+    onRequestUnlock(() => {
+      void saveToServer();
+    });
+  };
+
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
@@ -303,7 +324,7 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
               {/* Enregistrer sur le serveur : seulement si on édite une chanson de la bibliothèque */}
               {editingSong && (
                 <button
-                  onClick={saveToServer}
+                  onClick={isUnlocked ? saveToServer : requestSave}
                   disabled={saveState === "saving"}
                   className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95 disabled:opacity-50 ${
                     saveState === "saved"
@@ -313,6 +334,7 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
                       : "bg-gradient-to-r from-violet-600 to-pink-600 hover:from-violet-500 hover:to-pink-500"
                   }`}
                 >
+                  <span className="mr-1">{isUnlocked ? "💾" : "🔒"}</span>
                   {saveState === "saving" ? "Enregistrement…" : saveState === "saved" ? "✓ Enregistré" : saveState === "error" ? "Échec : réessayer" : "Enregistrer sur le serveur"}
                 </button>
               )}
@@ -338,8 +360,20 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
               <input type="range" min={0} max={duration || 0} step={0.05} value={currentTime} onChange={(e) => { const t = parseFloat(e.target.value); if (audioRef.current) audioRef.current.currentTime = t; setCurrentTime(t); }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
             </div>
             <span className="w-10">{formatDisplay(duration)}</span>
-            <button onClick={togglePlay} className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center text-sm shadow-md shadow-purple-900/40 transition-all active:scale-95 ml-1">
-              {playing ? "II" : "▶"}
+            <button
+              onClick={togglePlay}
+              title="Play / Pause (Espace)"
+              className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center shadow-md shadow-purple-900/40 transition-all active:scale-95 ml-1 text-white shrink-0"
+            >
+              {playing ? (
+                <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
+                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 fill-current ml-0.5" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              )}
             </button>
           </div>
         )}

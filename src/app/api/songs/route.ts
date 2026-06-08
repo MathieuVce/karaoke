@@ -1,5 +1,6 @@
 import { list, del } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { checkAuth } from "@/lib/auth";
 
 export interface SongMeta {
   id: string;
@@ -64,6 +65,9 @@ export async function GET() {
 //   type "lrc" (défaut) → .lrc ; type "vocals" → .vocals.*
 export async function PATCH(request: Request) {
   try {
+    if (!(await checkAuth())) {
+      return NextResponse.json({ error: "Non autorisé. Mot de passe requis." }, { status: 401 });
+    }
     const { id, type } = await request.json();
     if (!id) return NextResponse.json({ error: "id manquant" }, { status: 400 });
     const { blobs } = await list({ prefix: `karaoke/${id}` });
@@ -79,6 +83,9 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    if (!(await checkAuth())) {
+      return NextResponse.json({ error: "Non autorisé. Mot de passe requis." }, { status: 401 });
+    }
     const { id } = await request.json();
     const { blobs } = await list({ prefix: `karaoke/${id}` });
     await Promise.all(blobs.map((b) => del(b.url)));

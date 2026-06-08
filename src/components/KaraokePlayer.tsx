@@ -7,6 +7,7 @@ import LrcEditor from "./LrcEditor";
 import LyricsDisplay from "./LyricsDisplay";
 import SongLibrary from "./SongLibrary";
 import ShareModal from "./ShareModal";
+import PasswordModal from "./PasswordModal";
 import type { SongMeta } from "@/app/api/songs/route";
 
 const DEMO_LRC = `[ti:Démo Karaoké]
@@ -47,6 +48,37 @@ export default function KaraokePlayer() {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  
+  // États d'administration pour la protection par mot de passe
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
+  // Vérifie l'état d'authentification au chargement
+  useEffect(() => {
+    fetch("/api/auth")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.authenticated) setIsUnlocked(true);
+      })
+      .catch(() => {});
+  }, []);
+
+  const requestUnlock = useCallback((onSuccess: () => void) => {
+    if (isUnlocked) {
+      onSuccess();
+    } else {
+      setPendingAction(() => onSuccess);
+      setPasswordModalOpen(true);
+    }
+  }, [isUnlocked]);
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth", { method: "DELETE" });
+      setIsUnlocked(false);
+    } catch { /* ignorer */ }
+  };
 
   const tick = useCallback(() => {
     const audio = audioRef.current;
@@ -119,19 +151,30 @@ export default function KaraokePlayer() {
     return () => cancelAnimationFrame(raf);
   }, [isDemo, mode, demoPeriod]);
 
+  // ─── Écoute partagée (hôte) : push d'ancre ────────────────────────────────
+
+  const pushAnchor = useCallback((playingNow: boolean, offset: number) => {
+    if (!shareId) return;
+    fetch(`/api/session/${shareId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playing: playingNow, offset }),
+    }).catch(() => {});
+  }, [shareId]);
+
   // Re-attacher les listeners à chaque remount de l'élément audio (clé change avec audioUrl)
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    const onPlay  = () => { setPlaying(true); const v = vocalsRef.current; if (v && vocalsUrl) { v.currentTime = audio.currentTime; v.play().catch(() => {}); } };
-    const onPause = () => { setPlaying(false); vocalsRef.current?.pause(); };
+    const onPlay  = () => { setPlaying(true); const v = vocalsRef.current; if (v && vocalsUrl) { v.currentTime = audio.currentTime; v.play().catch(() => {}); } pushAnchor(true, audio.currentTime); };
+    const onPause = () => { setPlaying(false); vocalsRef.current?.pause(); pushAnchor(false, audio.currentTime); };
     audio.addEventListener("play",  onPlay);
     audio.addEventListener("pause", onPause);
     return () => {
       audio.removeEventListener("play",  onPlay);
       audio.removeEventListener("pause", onPause);
     };
-  }, [audioUrl, vocalsUrl]); // dépend de audioUrl/vocalsUrl : se réexécute après chaque remount
+  }, [audioUrl, vocalsUrl, pushAnchor]); // dépend de audioUrl/vocalsUrl/pushAnchor : se réexécute après chaque remount
 
   const handleAudioFile = (file: File) => {
     if (audioUrl && audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
@@ -178,8 +221,8 @@ export default function KaraokePlayer() {
   // Ouvre une chanson de la bibliothèque dans l'éditeur de LRC
   const handleEditSong = (song: SongMeta) => {
     if (audioUrl && audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
-    setAudioUrl(song.audioUrl);
-    setAudioName(song.title);
+    setAudioUrl(song.vocalsUrl || song.audioUrl);
+    setAudioName(song.vocalsUrl ? `${song.title} (Voix)` : song.title);
     setCurrentTime(0);
     setDuration(0);
     setPlaying(false);
@@ -187,18 +230,7 @@ export default function KaraokePlayer() {
     setMode("editor");
   };
 
-  // ─── Écoute partagée (hôte) ──────────────────────────────────────────────
-
-  const pushAnchor = useCallback((playingNow: boolean, offset: number) => {
-    if (!shareId) return;
-    fetch(`/api/session/${shareId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ playing: playingNow, offset }),
-    }).catch(() => {});
-  }, [shareId]);
-
-  // Heartbeat lent : corrige une éventuelle dérive toutes les 10s.
+  // Heartbeat : corrige une éventuelle dérive toutes les 5s.
   // Les changements play/pause/seek sont poussés immédiatement (voir togglePlay/seek/skip),
   // donc pas besoin de spammer le serveur : le follower interpole entre deux ancres.
   useEffect(() => {
@@ -206,7 +238,7 @@ export default function KaraokePlayer() {
     const iv = setInterval(() => {
       const a = audioRef.current;
       if (a && !a.paused) pushAnchor(true, a.currentTime);
-    }, 10000);
+    }, 5000);
     return () => clearInterval(iv);
   }, [shareId, pushAnchor]);
 
@@ -268,8 +300,7 @@ export default function KaraokePlayer() {
     } else {
       audio.pause();
     }
-    // setPlaying est géré par les événements play/pause de l'audio
-    pushAnchor(!audio.paused, audio.currentTime);
+    // setPlaying + pushAnchor sont gérés par les événements play/pause de l'audio
   };
 
   const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -339,6 +370,27 @@ export default function KaraokePlayer() {
           </button>
         )}
 
+        {/* Bouton d'administration global (cadenas) */}
+        <button
+          onClick={() => {
+            if (isUnlocked) {
+              handleLogout();
+            } else {
+              requestUnlock(() => {});
+            }
+          }}
+          title={isUnlocked ? "Fermer la session d'édition (Verrouiller)" : "Ouvrir la session d'édition (Déverrouiller)"}
+          className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap border transition-all select-none active:scale-95 ${
+            isUnlocked
+              ? "bg-green-500/10 border-green-500/30 text-green-300 hover:bg-green-500/20"
+              : "bg-white/5 border-white/10 hover:bg-white/10 text-white/70"
+          }`}
+        >
+          <span className="text-xs">{isUnlocked ? "🔓" : "🔒"}</span>
+          <span className="hidden md:inline">{isUnlocked ? "Admin déverrouillé" : "Admin verrouillé"}</span>
+          <span className="md:hidden">{isUnlocked ? "Admin" : "Verrouillé"}</span>
+        </button>
+
         {/* Onglets inline : desktop uniquement */}
         <div className="hidden sm:flex gap-1 -mb-px">
           {tabs.map(({ key, label }) => (
@@ -406,6 +458,12 @@ export default function KaraokePlayer() {
                 {label}
               </button>
             ))}
+            {!audioUrl && (
+              <div className="mt-auto p-3.5 rounded-xl bg-purple-900/20 border border-purple-500/10 text-xs text-white/50 space-y-1">
+                <span className="font-semibold text-purple-300 block">Aucune chanson</span>
+                <span>Allez dans la Bibliothèque pour charger un titre.</span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -413,7 +471,13 @@ export default function KaraokePlayer() {
       <div className="flex-1 overflow-hidden relative z-10">
         {mode === "library" && (
           <div className="h-full">
-            <SongLibrary onLoadSong={loadSongFromServer} onEditSong={handleEditSong} onShareSong={handleShareSong} />
+            <SongLibrary
+              onLoadSong={loadSongFromServer}
+              onEditSong={handleEditSong}
+              onShareSong={handleShareSong}
+              isUnlocked={isUnlocked}
+              onRequestUnlock={requestUnlock}
+            />
           </div>
         )}
 
@@ -425,25 +489,45 @@ export default function KaraokePlayer() {
 
         {mode === "editor" && (
           <div className="h-full">
-            <LrcEditor audioUrl={audioUrl} audioName={audioName} onLoadAudio={handleAudioFile} editingSong={editingSong} />
+            <LrcEditor
+              audioUrl={audioUrl}
+              audioName={audioName}
+              onLoadAudio={handleAudioFile}
+              editingSong={editingSong}
+              isUnlocked={isUnlocked}
+              onRequestUnlock={requestUnlock}
+            />
           </div>
         )}
 
         {mode === "player" && (
           <div className="flex flex-col h-full">
-            <div className="flex-1 min-h-0 px-4">
-              <LyricsDisplay
-                lines={isDemo ? demoLines : lrcData.lines}
-                currentTime={currentTime}
-                hasWordTimestamps={lrcData.hasWordTimestamps}
-                onClickLine={(time) => {
-                  // En mode démo (pas de source), le clic ne fait rien : la boucle continue
-                  if (isDemo || !audioRef.current) return;
-                  audioRef.current.currentTime = time;
-                  setCurrentTime(time);
-                  if (audioRef.current.paused) { audioRef.current.play(); setPlaying(true); }
-                }}
-              />
+            <div className="flex-1 min-h-0 px-4 flex flex-col">
+              {isDemo && (
+                <div className="mx-auto my-3 p-3 w-full max-w-md rounded-xl bg-purple-950/40 border border-purple-500/20 flex items-center justify-between gap-3 text-xs text-white/70 relative z-20">
+                  <span>Vous visualisez la démo. Chargez une chanson !</span>
+                  <button
+                    onClick={() => setMode("library")}
+                    className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-pink-600 hover:from-violet-500 hover:to-pink-500 text-white font-semibold transition-all active:scale-95 whitespace-nowrap"
+                  >
+                    Bibliothèque
+                  </button>
+                </div>
+              )}
+              <div className="flex-1 min-h-0">
+                <LyricsDisplay
+                  lines={isDemo ? demoLines : lrcData.lines}
+                  currentTime={currentTime}
+                  hasWordTimestamps={lrcData.hasWordTimestamps}
+                  onClickLine={(time) => {
+                    // En mode démo (pas de source), le clic ne fait rien : la boucle continue
+                    if (isDemo || !audioRef.current) return;
+                    audioRef.current.currentTime = time;
+                    setCurrentTime(time);
+                    if (audioRef.current.paused) { audioRef.current.play(); setPlaying(true); }
+                  }}
+                />
+              </div>
             </div>
 
             <div className="shrink-0 px-3 sm:px-6 py-3 sm:py-4 space-y-3" style={{ background: "rgba(10,5,30,0.65)", backdropFilter: "blur(20px)", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
@@ -468,8 +552,20 @@ export default function KaraokePlayer() {
                   −10s
                 </button>
 
-                <button onClick={togglePlay} disabled={!audioUrl} className="shrink-0 w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center text-2xl shadow-lg shadow-purple-900/40 transition-all active:scale-95 disabled:opacity-30">
-                  {playing ? "II" : "▶"}
+                <button
+                  onClick={togglePlay}
+                  disabled={!audioUrl}
+                  className="shrink-0 w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center shadow-lg shadow-purple-900/40 transition-all active:scale-95 disabled:opacity-30 text-white"
+                >
+                  {playing ? (
+                    <svg className="w-6 h-6 fill-current" viewBox="0 0 24 24">
+                      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-6 h-6 fill-current ml-1" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  )}
                 </button>
 
                 <button onClick={() => { if (audioRef.current) { const t = Math.min(duration, currentTime + 10); audioRef.current.currentTime = t; setCurrentTime(t); pushAnchor(!audioRef.current.paused, t); } }} className="shrink-0 w-12 h-12 rounded-full bg-gradient-to-br from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 flex items-center justify-center text-xs font-bold shadow-md shadow-purple-900/30 transition-all active:scale-95">
@@ -503,7 +599,7 @@ export default function KaraokePlayer() {
 
               {!audioUrl && (
                 <p className="text-center text-xs text-white/30 px-2">
-                  Glissez un MP3 · créez les paroles dans <strong className="text-white/50">Créer</strong> · ajustez dans <strong className="text-white/50">Éditer</strong>
+                  Glissez un MP3 · chargez depuis la <strong className="text-white/50 cursor-pointer hover:text-white transition-colors underline" onClick={() => setMode("library")}>Bibliothèque</strong> · créez les paroles dans <strong className="text-white/50">Créer</strong> · ajustez dans <strong className="text-white/50">Éditer</strong>
                 </p>
               )}
             </div>
@@ -529,6 +625,23 @@ export default function KaraokePlayer() {
       />
 
       {shareUrl && modalOpen && <ShareModal url={shareUrl} onClose={() => setModalOpen(false)} onStop={stopShare} />}
+
+      {passwordModalOpen && (
+        <PasswordModal
+          onClose={() => {
+            setPasswordModalOpen(false);
+            setPendingAction(null);
+          }}
+          onSuccess={() => {
+            setIsUnlocked(true);
+            setPasswordModalOpen(false);
+            if (pendingAction) {
+              pendingAction();
+              setPendingAction(null);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
