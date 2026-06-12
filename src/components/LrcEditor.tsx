@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect, useCallback, Fragment } from "react";
 import { upload } from "@vercel/blob/client";
+import { Download, Play, Pause } from "lucide-react";
 import { parseLrc } from "@/lib/lrc-parser";
 
 interface EditLine {
@@ -59,6 +60,7 @@ interface Props {
 export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSong, isUnlocked, onRequestUnlock }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const animRef = useRef<number>(0);
+  const nextIdRef = useRef(0); // ids uniques pour les lignes ajoutées
 
   const [lines, setLines] = useState<EditLine[]>([]);
   const [title, setTitle] = useState("");
@@ -97,6 +99,7 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
       words: l.words ? l.words.map((w) => ({ time: w.time, text: w.text })) : null,
     }));
     setLines(editLines);
+    nextIdRef.current = editLines.length;
     setTsInputs(Object.fromEntries(editLines.map((l) => [l.id, toTimestamp(l.timeS)])));
     setLrcLoaded(true);
   }, []);
@@ -213,8 +216,69 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
     }));
   };
 
+  // Édite le texte de la ligne. Pour une ligne mot à mot, re-découpe en gardant
+  // les timestamps existants (mappés par position) → corrige l'orthographe / ajoute des mots.
   const handleTextChange = (id: number, val: string) => {
-    setLines((prev) => prev.map((l) => l.id === id ? { ...l, text: val } : l));
+    setLines((prev) => prev.map((l) => {
+      if (l.id !== id) return l;
+      if (!l.words || l.words.length === 0) return { ...l, text: val };
+      const tokens = val.split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return { ...l, text: val, words: [] };
+      const words = tokens.map((t, i) => ({
+        text: t + " ",
+        time: l.words![Math.min(i, l.words!.length - 1)]?.time ?? l.timeS,
+      }));
+      return { ...l, text: val, words };
+    }));
+  };
+
+  // Édite le texte d'un seul mot (orthographe), conserve son timestamp
+  const setWordText = (lineId: number, wordIdx: number, val: string) => {
+    setLines((prev) => prev.map((l) => {
+      if (l.id !== lineId || !l.words) return l;
+      const words = l.words.map((w, i) => (i === wordIdx ? { ...w, text: val.replace(/\s+$/, "") + " " } : w));
+      return { ...l, words, text: words.map((w) => w.text).join("").trim() };
+    }));
+  };
+
+  // Insère une nouvelle ligne (vide) juste après une ligne donnée
+  const addLineAfter = (id: number) => {
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.id === id);
+      if (idx === -1) return prev;
+      const cur = prev[idx];
+      const next = prev[idx + 1];
+      const newTime = next ? (cur.timeS + next.timeS) / 2 : cur.timeS + 1;
+      const newLine: EditLine = { id: nextIdRef.current++, timeS: newTime, text: "", words: null };
+      setTsInputs((ti) => ({ ...ti, [newLine.id]: toTimestamp(newTime) }));
+      return [...prev.slice(0, idx + 1), newLine, ...prev.slice(idx + 1)];
+    });
+  };
+
+  const deleteLine = (id: number) => {
+    setLines((prev) => prev.filter((l) => l.id !== id));
+  };
+
+  // Coupe une ligne mot à mot : le mot wordIdx démarre une nouvelle ligne
+  const splitLineAtWord = (lineId: number, wordIdx: number) => {
+    if (wordIdx <= 0) return;
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.id === lineId);
+      if (idx === -1) return prev;
+      const l = prev[idx];
+      if (!l.words || wordIdx >= l.words.length) return prev;
+      const head = l.words.slice(0, wordIdx);
+      const tail = l.words.slice(wordIdx);
+      const newLine: EditLine = {
+        id: nextIdRef.current++,
+        timeS: tail[0].time,
+        text: tail.map((w) => w.text).join("").trim(),
+        words: tail,
+      };
+      setTsInputs((ti) => ({ ...ti, [newLine.id]: toTimestamp(tail[0].time) }));
+      const updated: EditLine = { ...l, words: head, text: head.map((w) => w.text).join("").trim() };
+      return [...prev.slice(0, idx), updated, newLine, ...prev.slice(idx + 1)];
+    });
   };
 
   const applyGlobalOffset = () => {
@@ -303,7 +367,7 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
               <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && onLoadAudio(e.target.files[0])} />
             </label>
           ) : (
-            <span className="text-xs text-green-400">✓ {audioName}</span>
+            <span className="text-xs text-green-400">{audioName}</span>
           )}
 
           {lrcLoaded && (
@@ -334,16 +398,15 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
                       : "bg-gradient-to-r from-violet-600 to-pink-600 hover:from-violet-500 hover:to-pink-500"
                   }`}
                 >
-                  <span className="mr-1">{isUnlocked ? "💾" : "🔒"}</span>
-                  {saveState === "saving" ? "Enregistrement…" : saveState === "saved" ? "✓ Enregistré" : saveState === "error" ? "Échec : réessayer" : "Enregistrer sur le serveur"}
+                  {saveState === "saving" ? "Enregistrement…" : saveState === "saved" ? "Saved" : saveState === "error" ? "Échec : réessayer" : isUnlocked ? "Enregistrer sur le serveur" : "Enregistrement verrouillé"}
                 </button>
               )}
-              <button onClick={downloadLrc} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium transition-all active:scale-95">
-                ↓ .lrc
+              <button onClick={downloadLrc} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium transition-all active:scale-95 flex items-center gap-1.5">
+                <Download size={16} className="text-white/70" /> .lrc
               </button>
               {audioUrl && (
-                <button onClick={downloadMp3} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium transition-all active:scale-95">
-                  ↓ .mp3
+                <button onClick={downloadMp3} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium transition-all active:scale-95 flex items-center gap-1.5">
+                  <Download size={16} className="text-white/70" /> .mp3
                 </button>
               )}
             </>
@@ -363,16 +426,12 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
             <button
               onClick={togglePlay}
               title="Play / Pause (Espace)"
-              className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center shadow-md shadow-purple-900/40 transition-all active:scale-95 ml-1 text-white shrink-0"
+              className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center shadow-md shadow-purple-900/40 transition-all active:scale-95 ml-1 shrink-0"
             >
               {playing ? (
-                <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
-                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                </svg>
+                <Pause size={14} className="text-white" />
               ) : (
-                <svg className="w-3.5 h-3.5 fill-current ml-0.5" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+                <Play size={14} className="text-white" fill="white" />
               )}
             </button>
           </div>
@@ -401,7 +460,7 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
               <tr className="text-xs text-gray-500 border-b border-gray-800">
                 <th className="px-4 py-1 text-left font-normal w-36">Timestamp</th>
                 <th className="px-2 py-1 text-left font-normal">Paroles</th>
-                <th className="px-4 py-1 text-right font-normal w-32">Actions</th>
+                <th className="px-4 py-1 text-right font-normal w-52">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -457,6 +516,20 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
                           >
                             Ici
                           </button>
+                          <button
+                            onClick={() => addLineAfter(line.id)}
+                            title="Insérer une ligne en dessous"
+                            className="w-7 h-7 rounded bg-white/10 hover:bg-white/20 text-sm font-bold transition-all active:scale-95 shrink-0"
+                          >
+                            +
+                          </button>
+                          <button
+                            onClick={() => deleteLine(line.id)}
+                            title="Supprimer la ligne"
+                            className="w-7 h-7 rounded bg-white/10 hover:bg-red-500/30 text-red-300 text-sm transition-all active:scale-95 shrink-0"
+                          >
+                            ✕
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -466,7 +539,7 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
                       <tr className="border-b border-gray-800/50 bg-gray-900/40">
                         <td colSpan={3} className="px-4 py-3">
                           <p className="text-xs text-gray-500 mb-2">
-                            Clic sur un mot = écouter depuis ce mot · <span className="text-violet-300">●</span> = caler sur la position actuelle
+                            Édite le texte d&apos;un mot pour corriger l&apos;orthographe · <span className="text-violet-300">▶</span> écouter · <span className="text-violet-300">●</span> caler sur la position · <span className="text-violet-300">↵</span> couper la ligne ici
                           </p>
                           <div className="flex flex-wrap gap-2">
                             {line.words!.map((w, wi) => {
@@ -477,19 +550,27 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
                                   key={wi}
                                   className={`flex flex-col gap-1 rounded-lg p-1.5 border ${wActive ? "border-violet-500 bg-violet-950/40" : "border-gray-700 bg-gray-800/50"}`}
                                 >
-                                  <button
-                                    onClick={() => seekTo(w.time)}
-                                    className="text-sm text-gray-200 hover:text-violet-300 transition-colors px-1 text-left"
-                                  >
-                                    {w.text.trim() || "·"}
-                                  </button>
+                                  <input
+                                    defaultValue={w.text.trim()}
+                                    key={`txt-${line.id}-${wi}-${w.text}`}
+                                    onBlur={(e) => setWordText(line.id, wi, e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                                    className="w-24 bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 text-sm text-gray-100 focus:outline-none focus:border-violet-500"
+                                  />
                                   <div className="flex items-center gap-1">
+                                    <button
+                                      onClick={() => seekTo(w.time)}
+                                      title="Écouter depuis ce mot"
+                                      className="w-6 h-6 rounded bg-white/10 hover:bg-white/20 flex items-center justify-center text-[10px] transition-all active:scale-95 shrink-0"
+                                    >
+                                      ▶
+                                    </button>
                                     <input
                                       defaultValue={toTimestamp(w.time)}
                                       key={`${line.id}-${wi}-${w.time}`}
                                       onBlur={(e) => setWordTime(line.id, wi, e.target.value)}
                                       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                                      className="w-20 bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-gray-300 focus:outline-none focus:border-violet-500"
+                                      className="w-[4.5rem] bg-gray-900 border border-gray-700 rounded px-1 py-0.5 font-mono text-[11px] text-gray-300 focus:outline-none focus:border-violet-500"
                                     />
                                     <button
                                       onClick={() => setWordToNow(line.id, wi)}
@@ -499,6 +580,15 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
                                     >
                                       ●
                                     </button>
+                                    {wi > 0 && (
+                                      <button
+                                        onClick={() => splitLineAtWord(line.id, wi)}
+                                        title="Couper la ligne ici (ce mot démarre une nouvelle ligne)"
+                                        className="w-6 h-6 rounded bg-white/10 hover:bg-violet-500/30 text-violet-200 flex items-center justify-center text-[11px] transition-all active:scale-95 shrink-0"
+                                      >
+                                        ↵
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               );
