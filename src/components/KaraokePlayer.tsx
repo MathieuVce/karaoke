@@ -1,11 +1,15 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
+import { Check, Pause, Play, Lock, Unlock, Menu, X } from "lucide-react";
 import { parseLrc, type LrcData, type LrcLine } from "@/lib/lrc-parser";
 import LrcCreator from "./LrcCreator";
 import LrcEditor from "./LrcEditor";
 import LyricsDisplay from "./LyricsDisplay";
 import SongLibrary from "./SongLibrary";
+import SearchKaraoke from "./SearchKaraoke";
+import YoutubeKaraoke from "./YoutubeKaraoke";
+import YoutubeSync from "./YoutubeSync";
 import ShareModal from "./ShareModal";
 import KLogo from "./KLogo";
 import PasswordModal from "./PasswordModal";
@@ -26,7 +30,7 @@ function formatTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-type Mode = "player" | "library" | "creator" | "editor";
+type Mode = "player" | "library" | "search" | "creator" | "editor";
 
 export default function KaraokePlayer() {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -34,6 +38,7 @@ export default function KaraokePlayer() {
   const animFrameRef = useRef<number>(0);
 
   const [mode, setMode] = useState<Mode>("player");
+  const [ytSong, setYtSong] = useState<{ youtubeId: string; lrc: string; title: string; artist: string } | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [vocalsUrl, setVocalsUrl] = useState<string | null>(null);
   const [audioName, setAudioName] = useState<string>("");
@@ -45,6 +50,7 @@ export default function KaraokePlayer() {
   const [vocalVol, setVocalVol] = useState(1); // volume de la piste voix (stem)
   const [dragging, setDragging] = useState(false);
   const [editingSong, setEditingSong] = useState<{ id: string; lrcUrl: string | null } | null>(null);
+  const [ytEdit, setYtEdit] = useState<{ youtubeId: string; text: string; title: string; artist: string; songId: string } | null>(null);
   const [shareId, setShareId] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -81,30 +87,28 @@ export default function KaraokePlayer() {
     } catch { /* ignorer */ }
   };
 
-  const tick = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    setCurrentTime(audio.currentTime);
-    // Synchro de la piste voix sur la piste principale (corrige la dérive)
-    const v = vocalsRef.current;
-    if (v && vocalsUrl) {
-      if (Math.abs(v.currentTime - audio.currentTime) > 0.12) v.currentTime = audio.currentTime;
-      if (audio.paused && !v.paused) v.pause();
-      if (!audio.paused && v.paused) v.play().catch(() => {});
-    }
-    animFrameRef.current = requestAnimationFrame(tick);
-  }, [vocalsUrl]);
+  useEffect(() => {
+    if (!playing) { cancelAnimationFrame(animFrameRef.current); return; }
+    const loop = () => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      setCurrentTime(audio.currentTime);
+      const v = vocalsRef.current;
+      if (v && vocalsUrl) {
+        if (Math.abs(v.currentTime - audio.currentTime) > 0.12) v.currentTime = audio.currentTime;
+        if (audio.paused && !v.paused) v.pause();
+        if (!audio.paused && v.paused) v.play().catch(() => {});
+      }
+      animFrameRef.current = requestAnimationFrame(loop);
+    };
+    animFrameRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animFrameRef.current);
+  }, [playing, vocalsUrl]);
 
   // Volume de la piste voix
   useEffect(() => {
     if (vocalsRef.current) vocalsRef.current.volume = vocalVol;
   }, [vocalVol, vocalsUrl]);
-
-  useEffect(() => {
-    if (playing) animFrameRef.current = requestAnimationFrame(tick);
-    else cancelAnimationFrame(animFrameRef.current);
-    return () => cancelAnimationFrame(animFrameRef.current);
-  }, [playing, tick]);
 
   const isDemo = !audioUrl;
 
@@ -180,12 +184,27 @@ export default function KaraokePlayer() {
   const handleAudioFile = (file: File) => {
     if (audioUrl && audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
     if (vocalsUrl && vocalsUrl.startsWith("blob:")) URL.revokeObjectURL(vocalsUrl);
+    setYtSong(null); // on repasse en lecture audio classique
     setAudioUrl(URL.createObjectURL(file));
     setVocalsUrl(null); // nouveau fichier principal = on repart sans stem
     setVocalVol(1);
     setAudioName(file.name.replace(/\.[^.]+$/, ""));
     setCurrentTime(0);
     setDuration(0);
+  };
+
+  // Charge une chanson YouTube (entrée légère : iframe + LRC, pas de fichier audio)
+  const handleLoadYoutube = async (song: SongMeta) => {
+    if (!song.youtubeId) return;
+    let lrc = "";
+    if (song.lrcUrl) {
+      try { lrc = await fetch(song.lrcUrl).then((r) => r.text()); } catch { /* ignore */ }
+    }
+    if (audioRef.current) audioRef.current.pause();
+    setAudioUrl(null);
+    setPlaying(false);
+    setYtSong({ youtubeId: song.youtubeId, lrc, title: song.title, artist: song.artist });
+    setMode("player");
   };
 
   // Charge un stem voix local (à jouer en synchro avec la piste principale)
@@ -197,11 +216,12 @@ export default function KaraokePlayer() {
 
   const loadSongFromServer = async (remoteAudioUrl: string, name: string, lrcUrl: string | null, vUrl: string | null = null) => {
     if (audioUrl && audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
+    setYtSong(null); // on repasse en lecture audio classique
     // Changer audioUrl change la key de <audio> → React démonte l'ancien (stop immédiat)
     // et monte un nouveau élément avec la nouvelle source, à currentTime = 0
     setAudioUrl(remoteAudioUrl);
     setVocalsUrl(vUrl);
-    setVocalVol(1);
+    setVocalVol(0); // karaoké : instru pur par défaut, le curseur réinjecte la voix guide au besoin
     setAudioName(name);
     setCurrentTime(0);
     setDuration(0);
@@ -219,9 +239,23 @@ export default function KaraokePlayer() {
     setMode("player");
   };
 
-  // Ouvre une chanson de la bibliothèque dans l'éditeur de LRC
-  const handleEditSong = (song: SongMeta) => {
+  // Ouvre une chanson de la bibliothèque en édition.
+  // Chanson YouTube : resynchronisation sur la vidéo (pas d'audio à éditer).
+  // Chanson audio : éditeur de timestamps classique.
+  const handleEditSong = async (song: SongMeta) => {
+    if (song.youtubeId) {
+      let lrc = "";
+      if (song.lrcUrl) {
+        try { lrc = await fetch(song.lrcUrl).then((r) => r.text()); } catch { /* ignore */ }
+      }
+      const text = parseLrc(lrc).lines.map((l) => l.text).join("\n");
+      setEditingSong(null);
+      setYtEdit({ youtubeId: song.youtubeId, text, title: song.title, artist: song.artist, songId: song.id });
+      setMode("editor");
+      return;
+    }
     if (audioUrl && audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
+    setYtEdit(null);
     setAudioUrl(song.vocalsUrl || song.audioUrl);
     setAudioName(song.vocalsUrl ? `${song.title} (Voix)` : song.title);
     setCurrentTime(0);
@@ -231,25 +265,47 @@ export default function KaraokePlayer() {
     setMode("editor");
   };
 
-  // Heartbeat : corrige une éventuelle dérive toutes les 5s.
-  // Les changements play/pause/seek sont poussés immédiatement (voir togglePlay/seek/skip),
-  // donc pas besoin de spammer le serveur : le follower interpole entre deux ancres.
+  // Heartbeat audio : corrige une éventuelle dérive toutes les 5s (chansons audio seulement ;
+  // pour YouTube, c'est handleYtProgress qui pousse l'ancre). Le follower interpole entre deux ancres.
   useEffect(() => {
-    if (!shareId) return;
+    if (!shareId || ytSong) return;
     const iv = setInterval(() => {
       const a = audioRef.current;
       if (a && !a.paused) pushAnchor(true, a.currentTime);
     }, 5000);
     return () => clearInterval(iv);
+  }, [shareId, ytSong, pushAnchor]);
+
+  // Pour une chanson YouTube partagée : pousse l'ancre depuis la progression de la vidéo.
+  // Push IMMÉDIAT sur play/pause ou sur saut (seek/dérive détectée), sinon heartbeat léger.
+  // Entre deux pushes, le follower interpole avec sa propre horloge → lecture fluide.
+  const lastYtPush = useRef<{ playing: boolean; time: number; at: number }>({ playing: false, time: 0, at: 0 });
+  const handleYtProgress = useCallback((playing: boolean, lyricsTime: number) => {
+    if (!shareId) return;
+    const now = Date.now();
+    const p = lastYtPush.current;
+    const expected = p.playing ? p.time + (now - p.at) / 1000 : p.time;
+    const jumped = Math.abs(lyricsTime - expected) > 0.35; // seek ou dérive
+    if (playing !== p.playing || jumped || now - p.at > 1500) {
+      lastYtPush.current = { playing, time: lyricsTime, at: now };
+      pushAnchor(playing, lyricsTime);
+    }
   }, [shareId, pushAnchor]);
 
   const handleShareSong = async (song: SongMeta) => {
-    // Charge la chanson dans le lecteur (l'hôte diffuse l'audio)
-    await loadSongFromServer(song.audioUrl, song.title, song.lrcUrl, song.vocalsUrl);
     // Récupère le LRC pour la session partagée
     let lrc = "";
     if (song.lrcUrl) {
       try { lrc = await fetch(song.lrcUrl).then((r) => r.text()); } catch { /* ignore */ }
+    }
+    // Charge la chanson : audio (l'hôte diffuse le son) ou YouTube (l'hôte joue la vidéo)
+    if (song.youtubeId) {
+      await handleLoadYoutube(song);
+    } else if (song.audioUrl) {
+      await loadSongFromServer(song.audioUrl, song.title, song.lrcUrl, song.vocalsUrl);
+    } else {
+      alert("Rien à partager pour cette chanson.");
+      return;
     }
     const parsed = parseLrc(lrc);
     try {
@@ -316,6 +372,7 @@ export default function KaraokePlayer() {
 
   const tabs: { key: Mode; label: string }[] = [
     { key: "player", label: "Lecteur" },
+    { key: "search", label: "Rechercher" },
     { key: "library", label: "Bibliothèque" },
     { key: "creator", label: "Créer" },
     { key: "editor", label: "Éditer" },
@@ -347,12 +404,10 @@ export default function KaraokePlayer() {
         {/* Burger : mobile uniquement */}
         <button
           onClick={() => setDrawerOpen(true)}
-          className="sm:hidden shrink-0 w-8 h-8 -mb-1 flex flex-col items-center justify-center gap-1 rounded-lg hover:bg-white/10 transition-colors"
+          className="sm:hidden shrink-0 w-8 h-8 -mb-1 flex items-center justify-center rounded-lg hover:bg-white/10 transition-colors text-white/70"
           aria-label="Menu"
         >
-          <span className="block w-4 h-0.5 bg-white/70 rounded" />
-          <span className="block w-4 h-0.5 bg-white/70 rounded" />
-          <span className="block w-4 h-0.5 bg-white/70 rounded" />
+          <Menu size={20} />
         </button>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -390,7 +445,7 @@ export default function KaraokePlayer() {
               : "bg-white/5 border-white/10 hover:bg-white/10 text-white/70"
           }`}
         >
-          <span className="text-xs">{isUnlocked ? "🔓" : "🔒"}</span>
+          {isUnlocked ? <Unlock size={13} className="shrink-0" /> : <Lock size={13} className="shrink-0" />}
           <span className="hidden md:inline">{isUnlocked ? "Admin déverrouillé" : "Admin verrouillé"}</span>
           <span className="md:hidden">{isUnlocked ? "Admin" : "Verrouillé"}</span>
         </button>
@@ -400,7 +455,7 @@ export default function KaraokePlayer() {
           {tabs.map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => { if (key !== "editor") setEditingSong(null); setMode(key); }}
+              onClick={() => { if (key !== "editor") { setEditingSong(null); setYtEdit(null); } setMode(key); }}
               className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 whitespace-nowrap ${
                 mode === key
                   ? "border-violet-400 text-white bg-white/10"
@@ -430,7 +485,13 @@ export default function KaraokePlayer() {
             </label>
             {audioUrl && (
               <label className="cursor-pointer px-2 sm:px-3 py-1.5 sm:py-2.5 mb-1.5 sm:mb-2 rounded-lg text-[11px] sm:text-xs font-medium transition-colors whitespace-nowrap" style={{ background: vocalsUrl ? "rgba(245,158,11,0.3)" : "rgba(255,255,255,0.08)", border: vocalsUrl ? "1px solid rgba(245,158,11,0.5)" : "1px solid rgba(255,255,255,0.12)" }}>
-                {vocalsUrl ? "Voix ✓" : "+ Voix"}
+                {vocalsUrl ? (
+                  <>
+                    <Check size={16} /> Voix
+                  </>
+                ) : (
+                  "+ Voix"
+                )}
                 <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && handleVocalsFile(e.target.files[0])} />
               </label>
             )}
@@ -452,12 +513,12 @@ export default function KaraokePlayer() {
                 <KLogo size={24} />
                 <span className="text-lg font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">Karaoké</span>
               </span>
-              <button onClick={() => setDrawerOpen(false)} className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/50 hover:text-white transition-colors">×</button>
+              <button onClick={() => setDrawerOpen(false)} className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/50 hover:text-white transition-colors"><X size={18} /></button>
             </div>
             {tabs.map(({ key, label }) => (
               <button
                 key={key}
-                onClick={() => { if (key !== "editor") setEditingSong(null); setMode(key); setDrawerOpen(false); }}
+                onClick={() => { if (key !== "editor") { setEditingSong(null); setYtEdit(null); } setMode(key); setDrawerOpen(false); }}
                 className={`text-left px-4 py-3 rounded-xl text-sm font-medium transition-colors ${
                   mode === key ? "bg-white/15 text-white" : "text-white/60 hover:bg-white/10 hover:text-white"
                 }`}
@@ -480,11 +541,18 @@ export default function KaraokePlayer() {
           <div className="h-full">
             <SongLibrary
               onLoadSong={loadSongFromServer}
+              onLoadYoutube={handleLoadYoutube}
               onEditSong={handleEditSong}
               onShareSong={handleShareSong}
               isUnlocked={isUnlocked}
               onRequestUnlock={requestUnlock}
             />
+          </div>
+        )}
+
+        {mode === "search" && (
+          <div className="h-full">
+            <SearchKaraoke />
           </div>
         )}
 
@@ -494,7 +562,21 @@ export default function KaraokePlayer() {
           </div>
         )}
 
-        {mode === "editor" && (
+        {mode === "editor" && ytEdit && (
+          <div className="h-full">
+            <YoutubeSync
+              key={ytEdit.songId}
+              initialVideoId={ytEdit.youtubeId}
+              initialText={ytEdit.text}
+              title={ytEdit.title}
+              artist={ytEdit.artist}
+              existingSongId={ytEdit.songId}
+              onBack={() => { setYtEdit(null); setMode("library"); }}
+            />
+          </div>
+        )}
+
+        {mode === "editor" && !ytEdit && (
           <div className="h-full">
             <LrcEditor
               audioUrl={audioUrl}
@@ -507,7 +589,18 @@ export default function KaraokePlayer() {
           </div>
         )}
 
-        {mode === "player" && (
+        {mode === "player" && ytSong && (
+          <YoutubeKaraoke
+            key={ytSong.youtubeId}
+            lrc={ytSong.lrc}
+            title={ytSong.title}
+            artist={ytSong.artist}
+            initialVideoId={ytSong.youtubeId}
+            onProgress={shareId ? handleYtProgress : undefined}
+          />
+        )}
+
+        {mode === "player" && !ytSong && (
           <div className="flex flex-col h-full">
             <div className="flex-1 min-h-0 px-4 flex flex-col">
               {isDemo && (
@@ -564,15 +657,7 @@ export default function KaraokePlayer() {
                   disabled={!audioUrl}
                   className="shrink-0 w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center shadow-lg shadow-purple-900/40 transition-all active:scale-95 disabled:opacity-30 text-white"
                 >
-                  {playing ? (
-                    <svg className="w-6 h-6 fill-current" viewBox="0 0 24 24">
-                      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-6 h-6 fill-current ml-1" viewBox="0 0 24 24">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  )}
+                  {playing ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-0.5" />}
                 </button>
 
                 <button onClick={() => { if (audioRef.current) { const t = Math.min(duration, currentTime + 10); audioRef.current.currentTime = t; setCurrentTime(t); pushAnchor(!audioRef.current.paused, t); } }} className="shrink-0 w-12 h-12 rounded-full bg-gradient-to-br from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 flex items-center justify-center text-xs font-bold shadow-md shadow-purple-900/30 transition-all active:scale-95">
@@ -581,7 +666,7 @@ export default function KaraokePlayer() {
 
                 {/* Voix (stem) : desktop, sinon espaceur d'équilibre */}
                 {vocalsUrl ? (
-                  <div className="hidden sm:flex items-center gap-2 text-white/40 shrink-0 w-28" title="Volume de la piste voix (stem). 0% = instrumental seul.">
+                  <div className="hidden sm:flex items-center gap-2 text-white/40 shrink-0 w-28" title="Volume de la piste voix. 0% = instrumental seul.">
                     <span className="text-[11px] font-medium whitespace-nowrap tabular-nums w-[52px] shrink-0">Voix {Math.round(vocalVol * 100)}%</span>
                     <input type="range" min={0} max={1} step={0.05} value={vocalVol} onChange={(e) => setVocalVol(parseFloat(e.target.value))} className="w-16 accent-amber-400" />
                   </div>
