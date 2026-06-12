@@ -6,51 +6,55 @@ export interface SongMeta {
   id: string;
   title: string;
   artist: string;
-  audioUrl: string;
+  audioUrl: string | null;   // null pour une chanson YouTube (pas de fichier audio)
   lrcUrl: string | null;
-  vocalsUrl: string | null; // piste voix optionnelle (stem) pour le mixage
+  vocalsUrl: string | null;  // piste voix optionnelle (stem) pour le mixage
+  youtubeId: string | null;  // chanson légère : musique via iframe YouTube
   createdAt: string;
 }
 
 const AUDIO_EXTS = [".mp3", ".mp4", ".ogg", ".wav", ".m4a", ".aac"];
+
+// Les pistes IA sont réécrites au même chemin (URL identique) : on ajoute une
+// version basée sur la date d'upload pour forcer le navigateur/CDN à recharger
+// le nouveau fichier au lieu de servir l'ancien depuis le cache.
+function bust(url: string, uploadedAt: string | Date): string {
+  const v = new Date(uploadedAt).getTime();
+  return Number.isFinite(v) ? `${url}${url.includes("?") ? "&" : "?"}v=${v}` : url;
+}
 
 export async function GET() {
   try {
     const { blobs } = await list({ prefix: "karaoke/" });
 
     const metaBlobs = blobs.filter((b) => b.pathname.endsWith(".meta.txt") || b.pathname.endsWith(".meta.json"));
-    // Piste voix : `{id}.vocals.{ext}` : à exclure de l'audio principal
     const isVocals = (p: string) => /\.vocals\.[^.]+$/.test(p);
     const audioBlobs = blobs.filter((b) => AUDIO_EXTS.some((ext) => b.pathname.endsWith(ext)) && !isVocals(b.pathname));
     const vocalsBlobs = blobs.filter((b) => isVocals(b.pathname));
     const lrcBlobs = blobs.filter((b) => b.pathname.endsWith(".lrc"));
 
+    // On itère sur les métadonnées (source de vérité) → inclut les chansons
+    // YouTube (sans fichier audio) comme les chansons audio classiques.
     const songs: SongMeta[] = [];
-
-    for (const audio of audioBlobs) {
-      // Extraire l'ID depuis le nom de fichier (premier segment avant le premier ".")
-      const filename = audio.pathname.split("/").pop() ?? "";
-      const id = filename.split(".")[0];
-      if (!id) continue;
-
-      const lrc = lrcBlobs.find((b) => b.pathname.includes(id)) ?? null;
-      const vocals = vocalsBlobs.find((b) => b.pathname.includes(id)) ?? null;
-      const metaBlob = metaBlobs.find((b) => b.pathname.includes(id));
-
-      let title = filename.replace(/\.[^.]+$/, "");
-      let artist = "";
-      let createdAt = audio.uploadedAt.toString();
-
-      if (metaBlob) {
-        try {
-          const data = await fetch(metaBlob.url).then((r) => r.json());
-          title = data.title ?? title;
-          artist = data.artist ?? "";
-          createdAt = data.createdAt ?? createdAt;
-        } catch { /* garder les valeurs par défaut */ }
-      }
-
-      songs.push({ id, title, artist, audioUrl: audio.url, lrcUrl: lrc?.url ?? null, vocalsUrl: vocals?.url ?? null, createdAt });
+    for (const metaBlob of metaBlobs) {
+      try {
+        const data = await fetch(metaBlob.url).then((r) => r.json());
+        const id: string = data.id ?? (metaBlob.pathname.split("/").pop() ?? "").split(".")[0];
+        if (!id) continue;
+        const audio = audioBlobs.find((b) => b.pathname.includes(id)) ?? null;
+        const lrc = lrcBlobs.find((b) => b.pathname.includes(id)) ?? null;
+        const vocals = vocalsBlobs.find((b) => b.pathname.includes(id)) ?? null;
+        songs.push({
+          id,
+          title: data.title ?? "Sans titre",
+          artist: data.artist ?? "",
+          audioUrl: audio ? bust(audio.url, audio.uploadedAt) : null,
+          lrcUrl: lrc ? bust(lrc.url, lrc.uploadedAt) : null,
+          vocalsUrl: vocals ? bust(vocals.url, vocals.uploadedAt) : null,
+          youtubeId: data.youtubeId ?? null,
+          createdAt: data.createdAt ?? metaBlob.uploadedAt.toString(),
+        });
+      } catch { /* meta illisible : on saute */ }
     }
 
     songs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -71,8 +75,11 @@ export async function PATCH(request: Request) {
     const { id, type } = await request.json();
     if (!id) return NextResponse.json({ error: "id manquant" }, { status: 400 });
     const { blobs } = await list({ prefix: `karaoke/${id}` });
+    const isVocals = (p: string) => /\.vocals\.[^.]+$/.test(p);
     const match = type === "vocals"
-      ? blobs.filter((b) => /\.vocals\.[^.]+$/.test(b.pathname))
+      ? blobs.filter((b) => isVocals(b.pathname))
+      : type === "audio"
+      ? blobs.filter((b) => AUDIO_EXTS.some((e) => b.pathname.endsWith(e)) && !isVocals(b.pathname))
       : blobs.filter((b) => b.pathname.endsWith(".lrc"));
     await Promise.all(match.map((b) => del(b.url)));
     return NextResponse.json({ ok: true, deleted: match.length });
