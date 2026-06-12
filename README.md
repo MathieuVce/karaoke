@@ -9,6 +9,8 @@ Application web de karaoké avec défilement de paroles synchronisées mot par m
 ![Vercel](https://img.shields.io/badge/Vercel-Blob-000000?logo=vercel&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Demucs-009688?logo=fastapi&logoColor=white)
 
+Lien démo: https://karaoke-ashy-iota.vercel.app
+
 ## Fonctionnalités
 
 **Lecteur** : lecture MP3 avec paroles synchronisées mot par mot (format Enhanced LRC), défilement fluide, remplissage progressif de chaque mot et zoom adaptatif.
