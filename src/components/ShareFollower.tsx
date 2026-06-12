@@ -18,7 +18,6 @@ export default function ShareFollower({ sessionId }: { sessionId: string }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
-  const [debug, setDebug] = useState("");
 
   // Ancre + décalage d'horloge client↔serveur
   const anchorRef = useRef<Anchor>({ playing: false, offset: 0, at: 0 });
@@ -30,9 +29,7 @@ export default function ShareFollower({ sessionId }: { sessionId: string }) {
   const poll = async () => {
     try {
       const res = await fetch(`/api/session/${sessionId}`, { cache: "no-store" });
-      setDebug(`HTTP ${res.status}`);
       if (!res.ok) {
-        if (res.status !== 404) setDebug(`HTTP ${res.status} : ${(await res.text()).slice(0, 120)}`);
         if (res.status === 404) {
           notFoundCount.current += 1;
           // Tolère quelques 404 au démarrage (création récente / cohérence du store)
@@ -58,14 +55,14 @@ export default function ShareFollower({ sessionId }: { sessionId: string }) {
         setArtist(session.artist);
       }
       setStatus("ok");
-    } catch (e) {
-      setDebug(`Réseau: ${(e as Error).message}`);
+    } catch {
+      // erreur réseau ponctuelle : on garde l'état courant et on réessaie au prochain sondage
     }
   };
 
   useEffect(() => {
     poll();
-    const interval = setInterval(poll, 1000);
+    const interval = setInterval(poll, 700);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -116,9 +113,8 @@ export default function ShareFollower({ sessionId }: { sessionId: string }) {
 
       <div className="flex-1 min-h-0 px-4 relative z-10">
         {status === "loading" && (
-          <div className="flex flex-col items-center justify-center h-full gap-2 text-white/40 text-sm">
-            <span>Connexion à la session…</span>
-            {debug && <span className="text-xs text-white/30 font-mono">{debug}</span>}
+          <div className="flex items-center justify-center h-full text-white/40 text-sm">
+            Connexion à la session…
           </div>
         )}
         {status === "error" && (

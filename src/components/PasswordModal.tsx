@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { X, Eye, EyeOff, ShieldAlert } from "lucide-react";
 
 interface Props {
   onClose: () => void;
@@ -11,6 +12,7 @@ export default function PasswordModal({ onClose, onSuccess }: Props) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Close on Escape key press
   useEffect(() => {
@@ -60,18 +62,15 @@ export default function PasswordModal({ onClose, onSuccess }: Props) {
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold flex items-center gap-2 text-white">
-            <span>🔒 Accès Administrateur</span>
-          </h2>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/50 hover:text-white transition-colors"
-            title="Fermer"
-          >
-            ×
-          </button>
-        </div>
+        <button
+          onClick={onClose}
+          className="absolute top-3 right-3 w-9 h-9 rounded-full bg-white/10 hover:bg-red-500/30 flex items-center justify-center text-white/80 hover:text-white transition-colors"
+          title="Fermer"
+        >
+          <X size={18} />
+        </button>
+
+        <h2 className="text-lg font-bold text-white pr-10">Accès administrateur</h2>
 
         <p className="text-xs text-white/60 leading-relaxed">
           La modification des fichiers existants sur le serveur (timestamps, voix, suppression) est protégée par un mot de passe.
@@ -79,20 +78,30 @@ export default function PasswordModal({ onClose, onSuccess }: Props) {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <input
-              type="password"
-              placeholder="Mot de passe administrateur"
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                if (error) setError("");
-              }}
-              className="w-full bg-white/10 border border-white/15 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400 transition-all placeholder-white/30"
-              autoFocus
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                placeholder="Mot de passe administrateur"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (error) setError("");
+                }}
+                className="w-full bg-white/10 border border-white/15 rounded-lg px-3 py-2 pr-10 text-sm text-white focus:outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400 transition-all placeholder-white/30"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-white/50 hover:text-white/90 hover:bg-white/10 transition-colors"
+                title={showPassword ? "Masquer" : "Afficher"}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
             {error && (
-              <p className="text-xs text-red-400 font-medium animate-pulse">
-                ⚠️ {error}
+              <p className="text-xs text-red-400 font-medium flex items-center gap-1.5">
+                <ShieldAlert size={14} className="shrink-0" /> {error}
               </p>
             )}
           </div>
