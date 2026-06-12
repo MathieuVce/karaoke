@@ -197,7 +197,7 @@ export default function LrcCreator({ audioUrl, audioName, onLoadAudio }: Props) 
 
           {!audioUrl ? (
             <label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-600 rounded-xl py-5 cursor-pointer hover:border-purple-500 transition-colors text-gray-400 hover:text-purple-300 text-sm">
-              Charger votre MP3
+              Charger votre audio
               <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && onLoadAudio(e.target.files[0])} />
             </label>
           ) : (

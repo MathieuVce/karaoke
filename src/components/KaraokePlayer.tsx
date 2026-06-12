@@ -18,7 +18,7 @@ import type { SongMeta } from "@/app/api/songs/route";
 const DEMO_LRC = `[ti:Démo Karaoké]
 [ar:Artiste]
 [00:02.00]<00:02.00>Bienvenue <00:02.60>dans <00:03.00>votre <00:03.50>lecteur <00:04.10>karaoké
-[00:05.50]<00:05.50>Glissez <00:06.10>votre <00:06.50>MP3 <00:07.00>et <00:07.30>votre <00:07.80>fichier <00:08.30>LRC <00:08.70>ici
+[00:05.50]<00:05.50>Glissez <00:06.10>votre <00:06.50>audio <00:07.00>et <00:07.30>votre <00:07.80>fichier <00:08.30>LRC <00:08.70>ici
 [00:09.80]<00:09.80>Ou <00:10.10>utilisez <00:10.70>l'onglet <00:11.20>Créer <00:11.80>pour <00:12.20>synchroniser <00:13.00>vos <00:13.40>paroles
 [00:14.50]<00:14.50>Chaque <00:15.10>mot <00:15.50>s'illumine <00:16.20>au <00:16.50>bon <00:16.90>moment
 [00:18.00]<00:18.00>Utilisez <00:18.80>l'onglet <00:19.40>Éditer <00:20.00>pour <00:20.50>corriger <00:21.10>les <00:21.50>timestamps
@@ -396,7 +396,7 @@ export default function KaraokePlayer() {
 
       {dragging && (
         <div className="fixed inset-0 z-50 bg-purple-900/60 border-4 border-dashed border-purple-400 flex items-center justify-center text-2xl font-bold pointer-events-none">
-          Déposer MP3 ou LRC ici
+          Déposer audio ou LRC ici
         </div>
       )}
 
@@ -476,8 +476,8 @@ export default function KaraokePlayer() {
               </div>
             )}
             <label className="cursor-pointer px-2 sm:px-3 py-1.5 sm:py-2.5 mb-1.5 sm:mb-2 rounded-lg text-[11px] sm:text-xs font-medium transition-colors whitespace-nowrap" style={{ background: "rgba(139,92,246,0.4)", border: "1px solid rgba(139,92,246,0.5)" }}>
-              + MP3
-              <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && handleAudioFile(e.target.files[0])} />
+              + Audio
+              <input type="file" accept="audio/*" className="hidden" onChange={(e) => e.target.files?.[0] && handleAudioFile(e.target.files[0])} />
             </label>
             <label className="cursor-pointer px-2 sm:px-3 py-1.5 sm:py-2.5 mb-1.5 sm:mb-2 rounded-lg text-[11px] sm:text-xs font-medium transition-colors whitespace-nowrap" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
               + LRC

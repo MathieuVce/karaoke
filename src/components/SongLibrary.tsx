@@ -117,7 +117,7 @@ export default function SongLibrary({ onLoadSong, onLoadYoutube, onEditSong, onS
       const id = `${Date.now()}-${slugify(title)}`;
 
       // Upload audio
-      setUploadProgress("Envoi du MP3…");
+      setUploadProgress("Envoi de l'audio…");
       const ext = audioFile.name.split(".").pop() ?? "mp3";
       await upload(`karaoke/${id}.${ext}`, audioFile, {
         access: "public",
@@ -296,8 +296,8 @@ export default function SongLibrary({ onLoadSong, onLoadYoutube, onEditSong, onS
 
             <div className="flex gap-3 min-w-0">
               <label className={`flex-1 min-w-0 flex items-center justify-center py-2.5 px-2 rounded-lg border text-sm cursor-pointer transition-colors ${audioFile ? "border-violet-500 bg-violet-900/30 text-violet-200" : "border-white/15 bg-white/5 text-white/40 hover:border-white/30"}`}>
-                <span className="truncate">{audioFile ? audioFile.name : "+ MP3"}</span>
-                <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && setAudioFile(e.target.files[0])} />
+                <span className="truncate">{audioFile ? audioFile.name : "+ Audio (MP3, WAV…)"}</span>
+                <input type="file" accept="audio/*" className="hidden" onChange={(e) => e.target.files?.[0] && setAudioFile(e.target.files[0])} />
               </label>
               <label className={`flex-1 min-w-0 flex items-center justify-center py-2.5 px-2 rounded-lg border text-sm cursor-pointer transition-colors ${lrcFile ? "border-pink-500 bg-pink-900/30 text-pink-200" : "border-white/15 bg-white/5 text-white/40 hover:border-white/30"}`}>
                 <span className="truncate">{lrcFile ? lrcFile.name : "+ LRC (optionnel)"}</span>
@@ -307,7 +307,7 @@ export default function SongLibrary({ onLoadSong, onLoadYoutube, onEditSong, onS
 
             <label className={`flex items-center justify-center py-2.5 px-2 rounded-lg border text-sm cursor-pointer transition-colors ${vocalsFile ? "border-amber-500 bg-amber-900/30 text-amber-200" : "border-white/15 bg-white/5 text-white/40 hover:border-white/30"}`}>
               <span className="truncate">{vocalsFile ? `Voix : ${vocalsFile.name}` : "+ Piste voix / stem (optionnel)"}</span>
-              <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && setVocalsFile(e.target.files[0])} />
+              <input type="file" accept="audio/*" className="hidden" onChange={(e) => e.target.files?.[0] && setVocalsFile(e.target.files[0])} />
             </label>
             <p className="text-[11px] text-white/30 -mt-1">
               Ajoute le stem (voix) pour activer le curseur Voix dans le lecteur.
@@ -430,7 +430,7 @@ export default function SongLibrary({ onLoadSong, onLoadYoutube, onEditSong, onS
 
                       {/* Instrumental (audio principal) : remplaçable, inutile pour YouTube */}
                       {song.audioUrl && (isUnlocked ? (
-                        <MenuFileItem accept="audio/*,.mp3" onFile={(f) => { handleFileUpload(song, f, "audio"); setMenuOpenId(null); }}>
+                        <MenuFileItem accept="audio/*" onFile={(f) => { handleFileUpload(song, f, "audio"); setMenuOpenId(null); }}>
                           <Music2 size={15} className="shrink-0" />Remplacer l&apos;instrumental
                         </MenuFileItem>
                       ) : (
@@ -441,7 +441,7 @@ export default function SongLibrary({ onLoadSong, onLoadYoutube, onEditSong, onS
 
                       {/* Stem voix : mixage voix/instru sur le fichier audio, inutile pour YouTube */}
                       {song.audioUrl && (isUnlocked ? (
-                        <MenuFileItem accept="audio/*,.mp3" onFile={(f) => { handleFileUpload(song, f, "vocals"); setMenuOpenId(null); }}>
+                        <MenuFileItem accept="audio/*" onFile={(f) => { handleFileUpload(song, f, "vocals"); setMenuOpenId(null); }}>
                           {song.vocalsUrl ? <RefreshCw size={15} className="shrink-0" /> : <Plus size={15} className="shrink-0" />}{song.vocalsUrl ? "Remplacer la voix" : "Ajouter la voix"}
                         </MenuFileItem>
                       ) : (
@@ -467,7 +467,7 @@ export default function SongLibrary({ onLoadSong, onLoadYoutube, onEditSong, onS
                       <div className="my-1 border-t border-white/10" />
 
                       {song.audioUrl && (
-                        <MenuItem onClick={() => { downloadFile(song.audioUrl!, `${slug(song.title)}.mp3`); setMenuOpenId(null); }}><Download size={15} className="shrink-0" />Télécharger le MP3</MenuItem>
+                        <MenuItem onClick={() => { downloadFile(song.audioUrl!, `${slug(song.title)}.mp3`); setMenuOpenId(null); }}><Download size={15} className="shrink-0" />Télécharger l'audio</MenuItem>
                       )}
                       {song.vocalsUrl && (
                         <MenuItem onClick={() => { downloadFile(song.vocalsUrl!, `${slug(song.title)}-voix.mp3`); setMenuOpenId(null); }}><Download size={15} className="shrink-0" />Télécharger la voix</MenuItem>

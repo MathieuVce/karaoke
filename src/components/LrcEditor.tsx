@@ -363,8 +363,8 @@ export default function LrcEditor({ audioUrl, audioName, onLoadAudio, editingSon
           </label>
           {!audioUrl ? (
             <label className="cursor-pointer px-3 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-600 text-xs font-medium transition-colors">
-              Charger MP3
-              <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && onLoadAudio(e.target.files[0])} />
+              Charger audio
+              <input type="file" accept="audio/*" className="hidden" onChange={(e) => e.target.files?.[0] && onLoadAudio(e.target.files[0])} />
             </label>
           ) : (
             <span className="text-xs text-green-400">{audioName}</span>
