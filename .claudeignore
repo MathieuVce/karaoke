@@ -1,0 +1,6 @@
+.next/
+node_modules/
+backend.worktrees/
+public/
+*.lock
+*.log
