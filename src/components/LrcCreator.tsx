@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect } from "react";
+import { Pause, Play } from "lucide-react";
 import { buildEnhancedLrc } from "@/lib/lrc-parser";
 import { stripEmojis, shouldSkipWord } from "@/lib/text-utils";
 
@@ -45,16 +46,43 @@ export default function LrcCreator({ audioUrl, audioName, onLoadAudio }: Props) 
   const [playing, setPlaying] = useState(false);
   const [latencyMs, setLatencyMs] = useState(DEFAULT_LATENCY_MS);
 
-  const tick = useCallback(() => {
-    if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
-    animRef.current = requestAnimationFrame(tick);
-  }, []);
-
   useEffect(() => {
-    if (playing) animRef.current = requestAnimationFrame(tick);
-    else cancelAnimationFrame(animRef.current);
+    if (!playing) { cancelAnimationFrame(animRef.current); return; }
+    const loop = () => {
+      if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
+      animRef.current = requestAnimationFrame(loop);
+    };
+    animRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animRef.current);
-  }, [playing, tick]);
+  }, [playing]);
+
+  const tap = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    const t = Math.max(0, a.currentTime - latencyMs / 1000);
+    let nextIdx = currentIdx + 1;
+    const updated = [...tapWords];
+    updated[currentIdx] = { ...updated[currentIdx], time: t };
+    while (nextIdx < updated.length && updated[nextIdx].skip) {
+      updated[nextIdx] = { ...updated[nextIdx], time: t };
+      nextIdx++;
+    }
+    setTapWords(updated);
+    setCurrentIdx(nextIdx);
+    if (nextIdx >= updated.length) setStep("done");
+  };
+
+  const undoTap = () => {
+    let idx = currentIdx - 1;
+    while (idx > 0 && tapWords[idx]?.skip) idx--;
+    idx = Math.max(0, idx);
+    setTapWords((ws) => {
+      const next = [...ws];
+      for (let i = idx; i < next.length; i++) next[i] = { ...next[i], time: null };
+      return next;
+    });
+    setCurrentIdx(idx);
+  };
 
   useEffect(() => {
     if (step !== "tap") return;
@@ -103,46 +131,6 @@ export default function LrcCreator({ audioUrl, audioName, onLoadAudio }: Props) 
     else { a.pause(); setPlaying(false); }
   };
 
-  const tap = useCallback(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    const t = Math.max(0, a.currentTime - latencyMs / 1000);
-    setTapWords((prev) => {
-      const next = [...prev];
-      next[currentIdx] = { ...next[currentIdx], time: t };
-      return next;
-    });
-    setCurrentIdx((prev) => {
-      let next = prev + 1;
-      setTapWords((ws) => {
-        const updated = [...ws];
-        while (next < updated.length && updated[next].skip) {
-          updated[next] = { ...updated[next], time: t };
-          next++;
-        }
-        return updated;
-      });
-      return next;
-    });
-  }, [currentIdx, latencyMs]);
-
-  const undoTap = useCallback(() => {
-    setCurrentIdx((prev) => {
-      let idx = prev - 1;
-      while (idx > 0 && tapWords[idx]?.skip) idx--;
-      idx = Math.max(0, idx);
-      setTapWords((ws) => {
-        const next = [...ws];
-        for (let i = idx; i < next.length; i++) next[i] = { ...next[i], time: null };
-        return next;
-      });
-      return idx;
-    });
-  }, [tapWords]);
-
-  useEffect(() => {
-    if (step === "tap" && tapWords.length > 0 && currentIdx >= tapWords.length) setStep("done");
-  }, [currentIdx, tapWords.length, step]);
 
   const buildOutput = () => {
     const grouped: { text: string; words: { time: number; text: string }[] }[] = lineTexts.map((t) => ({ text: t, words: [] }));
@@ -214,7 +202,7 @@ export default function LrcCreator({ audioUrl, audioName, onLoadAudio }: Props) 
             </label>
           ) : (
             <div className="flex items-center justify-between bg-gray-800 rounded-lg px-3 py-2 text-sm text-green-400">
-              <span>✓ {audioName || "Audio chargé"}</span>
+              <span>Check {audioName || "Audio chargé"}</span>
               <label className="text-xs text-gray-400 hover:text-gray-200 cursor-pointer transition-colors">
                 changer
                 <input type="file" accept="audio/*,.mp3" className="hidden" onChange={(e) => e.target.files?.[0] && onLoadAudio(e.target.files[0])} />
@@ -286,7 +274,9 @@ export default function LrcCreator({ audioUrl, audioName, onLoadAudio }: Props) 
             </div>
             <div className="flex items-center gap-3 justify-center">
               <button onClick={() => { if (audioRef.current) audioRef.current.currentTime = Math.max(0, currentTime - 3); }} className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 flex items-center justify-center text-xs font-bold shadow-md shadow-purple-900/30 transition-all active:scale-95">−3s</button>
-              <button onClick={togglePlay} className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center text-xl shadow-lg shadow-purple-900/40 transition-all active:scale-95">{playing ? "II" : "▶"}</button>
+              <button onClick={togglePlay} className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 flex items-center justify-center shadow-lg shadow-purple-900/40 transition-all active:scale-95">
+                {playing ? <Pause size={18} className="text-white" /> : <Play size={18} className="text-white" fill="white" />}
+              </button>
               <button onClick={tap} className="flex-1 max-w-xs py-3 rounded-xl font-bold text-base bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 active:scale-95 transition-all shadow-lg shadow-purple-900/40">TAP Espace</button>
               <button onClick={undoTap} disabled={currentIdx === 0} className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 flex items-center justify-center text-xs font-bold shadow-md shadow-purple-900/30 transition-all active:scale-95 disabled:opacity-30">Annuler</button>
               <button onClick={() => { if (audioRef.current) audioRef.current.currentTime = Math.min(duration, currentTime + 3); }} className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-700 to-pink-700 hover:from-purple-600 hover:to-pink-600 flex items-center justify-center text-xs font-bold shadow-md shadow-purple-900/30 transition-all active:scale-95">+3s</button>
